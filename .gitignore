@@ -1,0 +1,16 @@
+# 运行时产物
+server.log
+server.err.log
+*.log
+
+# 一次性/临时脚本
+_fin.js
+_*.js
+
+# 依赖（本项目零依赖，此目录仅备用）
+node_modules/
+
+# 系统文件
+Thumbs.db
+desktop.ini
+.DS_Store
