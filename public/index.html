@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>加密货币大盘 · 动量与波动率</title>
+<script>
+// 首屏之前定好主题，避免闪一下白/黑
+(function () {
+  try {
+    var q = new URLSearchParams(location.search).get('theme');
+    var m = (q === 'light' || q === 'dark') ? q : localStorage.getItem('cmd-theme');
+    if (m === 'light' || m === 'dark') document.documentElement.setAttribute('data-theme', m);
+  } catch (e) {}
+})();
+</script>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="page">
+
+  <header class="head">
+    <div>
+      <h1>加密货币大盘</h1>
+      <div class="sub">CoinLore · Binance Vision · Alternative.me ｜ 快照 <span id="snap">—</span></div>
+    </div>
+    <div class="head-right">
+      <span class="badge" id="fngBadge">—</span>
+      <span class="sub" id="updated">—</span>
+      <label class="switch"><input type="checkbox" id="autoToggle" checked> 自动刷新</label>
+      <div class="seg" id="themeSeg" role="group" aria-label="主题">
+        <button type="button" data-theme="light">浅色</button>
+        <button type="button" data-theme="dark">深色</button>
+        <button type="button" data-theme="auto">跟随系统</button>
+      </div>
+      <button class="btn" id="refreshBtn">刷新</button>
+    </div>
+  </header>
+
+  <nav class="maintabs" id="mainTabs" role="tablist">
+    <button type="button" class="mtab on" data-view="market">大盘行情</button>
+    <button type="button" class="mtab" data-view="hyperliquid">Hyperliquid</button>
+    <button type="button" class="mtab" data-view="strategy">策略模拟盘</button>
+  </nav>
+
+  <div id="view-market">
+
+  <section class="stats" id="stats">
+    <div class="stat"><div class="sub">总市值</div><div class="stat-value" id="stMcap">—</div><div class="sub" id="stMcapChg">—</div></div>
+    <div class="stat"><div class="sub">24h 成交额</div><div class="stat-value" id="stVol">—</div></div>
+    <div class="stat"><div class="sub">BTC 主导率</div><div class="stat-value" id="stBtcD">—</div></div>
+    <div class="stat"><div class="sub">ETH 主导率</div><div class="stat-value" id="stEthD">—</div></div>
+    <div class="stat"><div class="sub">恐惧贪婪指数</div><div class="stat-value" id="stFng">—</div></div>
+  </section>
+
+  <section class="block">
+    <div class="block-head">
+      <div>
+        <h2>K 线</h2>
+        <div class="sub">Binance Vision 现货 · 自动补最新一根</div>
+      </div>
+      <div class="controls">
+        <select id="symbolSelect" class="select" aria-label="币种"></select>
+        <div class="seg" id="tfTabs" role="group" aria-label="周期"></div>
+      <div class="seg ind" data-indbar role="group" aria-label="技术指标">
+        <button type="button" data-ind="ma">MA</button>
+        <button type="button" data-ind="ema">EMA</button>
+        <button type="button" data-ind="boll">BOLL</button>
+        <button type="button" data-ind="vol">VOL</button>
+        <button type="button" data-ind="macd">MACD</button>
+        <button type="button" data-ind="rsi">RSI</button>
+      </div>
+      </div>
+    </div>
+    <div class="card kline-card">
+      <div class="kline-top">
+        <div>
+          <div class="kline-price" id="klinePrice">—</div>
+          <div class="sub" id="klineChange">—</div>
+        </div>
+        <div class="kline-ohlc" id="klineOhlc"></div>
+      </div>
+      <div class="chart-wrap kline-wrap"><canvas id="klineCanvas"></canvas></div>
+      <div class="kline-foot">
+        <span id="klineRange">—</span>
+        <span class="spacer"></span>
+        <span id="klineNote">—</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="block">
+    <div class="block-head">
+      <div>
+        <h2>全市场异动扫描</h2>
+        <div class="sub" id="scanSub">扫描中…</div>
+      </div>
+      <div class="controls">
+        <div class="seg" id="scanTabs" role="group" aria-label="排序周期"></div>
+        <input id="scanSearch" class="select search" type="search" placeholder="搜索币种，如 MDX" autocomplete="off" spellcheck="false">
+      </div>
+    </div>
+    <div class="conclusion" id="scanLead">加载中…</div>
+    <div class="card">
+      <div class="scroll"><div id="scanTable"></div></div>
+      <div class="sub" id="scanFoot" style="margin-top:10px"></div>
+    </div>
+  </section>
+
+  <section class="block">
+    <div class="block-head">
+      <div>
+        <h2>动量与波动率</h2>
+        <div class="sub">观察名单 + 自动并入的扫描异动币 · 5m K 线聚合</div>
+      </div>
+      <span class="badge" id="momBadge">—</span>
+    </div>
+    <div class="conclusion" id="conclusion">加载中…</div>
+
+    <div class="card">
+      <h3 class="h3">动量热力图 <span class="sub">各周期涨跌幅 %（绿涨红跌）· 按 1h 动量排序</span></h3>
+      <div class="scroll"><div id="heat"></div></div>
+    </div>
+
+    <div class="cols">
+      <div class="card">
+        <h3 class="h3">波动率排行 <span class="sub">近 1 小时 · 日均波动 % · 相对 24h 倍数</span></h3>
+        <div id="volBars"></div>
+      </div>
+      <div class="card">
+        <h3 class="h3">动量 × 波动率 <span class="sub">横轴 1h 动量 · 纵轴 1h 波动 · 点大小=24h 成交额</span></h3>
+        <div id="scatter"></div>
+      </div>
+    </div>
+
+    <div class="cols">
+      <div class="card">
+        <h3 class="h3">恐惧贪婪指数 <span class="sub">近 31 天</span></h3>
+        <div class="chart-wrap fng-wrap"><canvas id="fngChart"></canvas></div>
+      </div>
+      <div class="card">
+        <h3 class="h3">市值占比 <span class="sub" id="donutSub">—</span></h3>
+        <div class="donut-wrap">
+          <canvas id="donut"></canvas>
+          <div class="donut-center"><b id="donutBtc">—</b><span class="sub">BTC 占比</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="block">
+    <div class="block-head">
+      <div><h2>市值前十</h2><div class="sub">按美元计价 · 1 小时 / 24 小时 / 7 天涨跌</div></div>
+    </div>
+    <div class="card">
+      <div class="scroll">
+        <table class="tbl">
+          <thead><tr><th>币种</th><th>价格</th><th>1 小时</th><th>24 小时</th><th>7 天</th><th>市值</th></tr></thead>
+          <tbody id="mcapBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  </div><!-- /view-market -->
+
+  <div id="view-hyperliquid" hidden>
+
+    <section class="block">
+      <div class="block-head">
+        <div><h2>Hyperliquid 鲸鱼实时监控</h2><div class="sub" id="hlOvSub">加载中…</div></div>
+        <span class="badge" id="hlBadge">—</span>
+      </div>
+      <div class="stats hl-stats">
+        <div class="stat"><div class="sub">仓位</div><div class="stat-value" id="hlPos">—</div><div class="sub split" id="hlPosSub">—</div></div>
+        <div class="stat"><div class="sub">保证金</div><div class="stat-value" id="hlMargin">—</div><div class="sub split" id="hlMarginSub">—</div></div>
+        <div class="stat"><div class="sub">盈亏 PnL</div><div class="stat-value" id="hlPnl">—</div><div class="sub split" id="hlPnlSub">—</div></div>
+        <div class="stat"><div class="sub">资金费</div><div class="stat-value" id="hlFee">—</div><div class="sub split" id="hlFeeSub">—</div></div>
+      </div>
+    </section>
+
+    <section class="block">
+      <div class="block-head">
+        <div><h2>大户持仓</h2><div class="sub">按仓位名义价值排序 · 前 50</div></div>
+      </div>
+      <div class="card"><div class="scroll"><div id="hlPositions"></div></div></div>
+    </section>
+
+    <div class="cols hl-duo">
+      <section class="block" style="margin-bottom:0">
+        <div class="block-head"><div><h2>最新鲸鱼动态</h2><div class="sub">最近 50 笔开平仓</div></div></div>
+        <div class="card"><div class="scroll"><div id="hlActions"></div></div></div>
+      </section>
+      <section class="block" style="margin-bottom:0">
+        <div class="block-head"><div><h2>持仓人数多空比</h2><div class="sub" id="hlUsersSub">近 7 天</div></div></div>
+        <div class="card">
+          <div class="hl-users">
+            <div class="hl-u"><div class="sub">多单人数</div><div class="hl-uv up" id="hlULong">—</div></div>
+            <div class="hl-u"><div class="sub">空单人数</div><div class="hl-uv down" id="hlUShort">—</div></div>
+            <div class="hl-u"><div class="sub">人数多空比</div><div class="hl-uv" id="hlURatio">—</div></div>
+          </div>
+          <div class="chart-wrap hl-chart" style="margin-top:14px"><canvas id="hlUsersChart"></canvas></div>
+        </div>
+      </section>
+    </div>
+
+    <section class="block" style="margin-top:38px">
+      <div class="block-head">
+        <div><h2>各币种持仓人数多空比</h2><div class="sub">按参与人数排序 · 绿=多 红=空</div></div>
+      </div>
+      <div class="card"><div class="ratio-grid" id="hlRatios"></div></div>
+    </section>
+  </div><!-- /view-hyperliquid -->
+
+  <div class="modal" id="klineModal" hidden>
+    <div class="modal-mask" data-close="1"></div>
+    <div class="modal-box" role="dialog" aria-modal="true" aria-label="币种 K 线">
+      <div class="modal-head">
+        <div>
+          <div class="modal-title" id="modalSymbol">—</div>
+          <div class="sub" id="modalPrice">—</div>
+        </div>
+        <span class="spacer"></span>
+        <div class="seg ind" data-indbar role="group" aria-label="技术指标">
+          <button type="button" data-ind="ma">MA</button>
+          <button type="button" data-ind="ema">EMA</button>
+          <button type="button" data-ind="boll">BOLL</button>
+          <button type="button" data-ind="vol">VOL</button>
+          <button type="button" data-ind="macd">MACD</button>
+          <button type="button" data-ind="rsi">RSI</button>
+        </div>
+        <div class="seg" id="modalTf" role="group" aria-label="周期"></div>
+        <button type="button" class="btn modal-x" id="modalClose" aria-label="关闭">✕</button>
+      </div>
+      <div class="chart-wrap modal-chart"><canvas id="modalCanvas"></canvas></div>
+      <div class="kline-foot">
+        <span id="modalOhlc"></span>
+        <span class="spacer"></span>
+        <span id="modalNote">—</span>
+      </div>
+    </div>
+  </div>
+
+  <div id="view-strategy" hidden>
+
+    <section class="block">
+      <div class="block-head">
+        <div><h2>策略模拟盘</h2><div class="sub">策略在本地浏览器里回测 · 支持杠杆与做空 · K 线取自 Binance 现货</div></div>
+        <span class="badge" id="stratBadge">—</span>
+      </div>
+
+      <div class="card">
+        <div class="strat-ctrl">
+          <select id="stratSymbol" class="select" aria-label="币种"></select>
+          <div class="seg" id="stratTf" role="group" aria-label="周期"></div>
+          <select id="stratPreset" class="select" aria-label="预设策略">
+            <optgroup label="趋势跟随">
+              <option value="ma">双均线交叉</option>
+              <option value="ma3">三均线多头排列</option>
+              <option value="macd">MACD 金叉死叉</option>
+              <option value="donchian">唐奇安通道突破</option>
+            </optgroup>
+            <optgroup label="震荡回归">
+              <option value="rsi">RSI 超买超卖</option>
+              <option value="bollrev">布林带均值回归</option>
+              <option value="grid">区间网格</option>
+            </optgroup>
+            <optgroup label="突破 / 波动">
+              <option value="boll">布林带突破追多</option>
+              <option value="atrbreak">动量突破 + ATR 止损</option>
+              <option value="volfilter">波动率过滤趋势</option>
+            </optgroup>
+            <optgroup label="做空（需勾选允许做空）">
+              <option value="short">空头趋势</option>
+            </optgroup>
+          </select>
+        </div>
+        <div class="strat-ctrl">
+          <span class="sub">回测区间</span>
+          <input id="stratFrom" class="select" type="date" aria-label="起始日期">
+          <span class="sub">→</span>
+          <input id="stratTo" class="select" type="date" aria-label="结束日期">
+          <div class="seg" id="stratQuick" role="group" aria-label="快捷区间">
+            <button type="button" data-days="7">近 7 天</button>
+            <button type="button" data-days="30" class="on">近 30 天</button>
+            <button type="button" data-days="90">近 90 天</button>
+            <button type="button" data-days="365">近 1 年</button>
+          </div>
+          <span class="spacer"></span>
+          <span class="sub" id="stratBars">—</span>
+        </div>
+        <textarea id="stratCode" class="strat-code" spellcheck="false" rows="12"></textarea>
+                <div class="sub strat-help">
+          可用：<code>MA(n)</code> <code>EMA(n)</code> <code>RSI(n)</code> <code>ATR(n)</code> <code>MACD(f,s,g)</code> <code>BOLL(n,k)</code>
+          <code>crossover(a,b)</code> <code>crossunder(a,b)</code> <code>highest(n)</code> <code>lowest(n)</code> <code>price</code> <code>volume</code> <code>POS</code> <code>ENTRY</code> <code>BARS</code><br>
+          取值：<code>.v</code> 当前根 · <code>.p</code> 前一根 · <code>.at(k)</code> 前 k 根；
+          <code>POS</code> 当前仓位 · <code>ENTRY</code> 开仓价 · <code>BARS</code> 已持仓根数；
+          返回 <b>1</b> 做多 / <b>-1</b> 做空 / <b>0</b> 空仓
+        </div>
+        <div class="strat-params">
+          <label class="pf"><span class="sub">初始资金</span><input id="stratCapital" class="select" type="number" value="10000" min="100" step="100"></label>
+          <label class="pf"><span class="sub">杠杆倍数</span><input id="stratLev" class="select" type="number" value="5" min="1" max="100" step="1"></label>
+          <label class="pf"><span class="sub">手续费 ‰</span><input id="stratFee" class="select" type="number" value="0.5" min="0" max="5" step="0.1"></label>
+          <label class="pf"><span class="sub">仓位比例 %</span><input id="stratPos" class="select" type="number" value="100" min="1" max="100" step="5"></label>
+          <label class="switch"><input type="checkbox" id="stratShort"> 允许做空</label>
+          <span class="spacer"></span>
+          <button class="btn btn-primary" id="stratRun">运行回测</button>
+        </div>
+        <div class="sub" id="stratMsg" style="margin-top:10px">—</div>
+      </div>
+    </section>
+
+    <section class="stats" id="stratStats">
+      <div class="stat"><div class="sub">总收益率</div><div class="stat-value" id="ssRet">—</div><div class="sub" id="ssRetSub">—</div></div>
+      <div class="stat"><div class="sub">最终权益</div><div class="stat-value" id="ssEquity">—</div><div class="sub" id="ssEquitySub">—</div></div>
+      <div class="stat"><div class="sub">交易次数</div><div class="stat-value" id="ssTrades">—</div><div class="sub" id="ssTradesSub">—</div></div>
+      <div class="stat"><div class="sub">胜率</div><div class="stat-value" id="ssWin">—</div><div class="sub" id="ssWinSub">—</div></div>
+      <div class="stat"><div class="sub">最大回撤</div><div class="stat-value" id="ssDd">—</div><div class="sub" id="ssDdSub">—</div></div>
+      <div class="stat"><div class="sub">盈亏比</div><div class="stat-value" id="ssPf">—</div><div class="sub" id="ssPfSub">—</div></div>
+    </section>
+
+    <section class="block">
+      <div class="block-head">
+        <div><h2>买卖点</h2><div class="sub" id="stratChartSub">运行回测后显示</div></div>
+        <div class="seg ind" id="stratIndBar" role="group" aria-label="显示">
+          <button type="button" data-sind="ma">MA</button>
+          <button type="button" data-sind="ema">EMA</button>
+          <button type="button" data-sind="boll">BOLL</button>
+          <button type="button" data-sind="vol">VOL</button>
+          <button type="button" data-sind="macd">MACD</button>
+          <button type="button" data-sind="rsi">RSI</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="chart-wrap strat-chart"><canvas id="stratCanvas"></canvas></div>
+        <div class="kline-foot"><span id="stratOhlc"></span><span class="spacer"></span><span id="stratRange">—</span></div>
+      </div>
+    </section>
+
+    <section class="block">
+      <div class="block-head"><div><h2>权益曲线</h2><div class="sub">账户净值（含浮动盈亏）</div></div></div>
+      <div class="card"><div class="chart-wrap strat-equity"><canvas id="stratEquityChart"></canvas></div></div>
+    </section>
+
+    <section class="block">
+      <div class="block-head"><div><h2>成交明细</h2><div class="sub" id="stratTradeSub">—</div></div></div>
+      <div class="card"><div class="scroll strat-trades"><div id="stratTrades"></div></div></div>
+    </section>
+  </div><!-- /view-strategy -->
+
+  <footer class="foot">
+    本地后端代理 · 零外部 CDN 依赖 · 仅供看盘参考，非投资建议
+  </footer>
+</div>
+
+<script src="vendor/chart.umd.js"></script>
+<script src="app.js"></script>
+
+</body>
+</html>
