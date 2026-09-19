@@ -829,6 +829,7 @@ function shapeNews(items) {
       text: String(d.smalltext || '').replace(/<[^>]*>/g, '').trim(),
       tags: newsTags(d),
       important: +d.important === 1,
+      source: '528btc',
     });
   }
   return out;
@@ -902,6 +903,199 @@ async function getNews() {
   return val;
 }
 
+// 把两个来源合成一份时间线：528btc 快讯 + Odaily 快讯
+async function getNewsAll() {
+  const hit = cache.get('newsall');
+  if (hit && Date.now() - hit.at < NEWS_TTL) return hit.val;
+
+  const [b, o] = await Promise.all([
+    getNews().catch(() => null),
+    getOdaily().catch(() => null),
+  ]);
+  const a = (b && b.ok) ? b.news : [];
+  const c = (o && o.ok) ? o.news : [];
+
+  // 同一件事两家都报的情况很常见，做一次近似去重（标题前 18 字）
+  const key = {}, merged = [];
+  a.concat(c).forEach((n) => {
+    const k = String(n.title).replace(/[\s《》“”，。：、！？·|（）()\[\]【】—-]/g, '').slice(0, 18);
+    if (key[k]) return;
+    key[k] = 1;
+    merged.push(n);
+  });
+  merged.sort((x, y) => y.t - x.t);
+
+  const now = Date.now();
+  const live = merged.filter((n) => n.t >= now - 24 * 3600000);
+  const pace = {
+    '1h': merged.filter((n) => now - n.t <= 3600000).length,
+    '4h': merged.filter((n) => now - n.t <= 4 * 3600000).length,
+    '24h': merged.filter((n) => now - n.t <= 24 * 3600000).length,
+  };
+  const heat = {};
+  live.forEach((n) => n.tags.forEach((s) => { heat[s] = (heat[s] || 0) + 1; }));
+  const hot = Object.keys(heat).map((s) => ({ s: s, n: heat[s] })).sort((x, y) => y.n - x.n).slice(0, 24);
+
+  const val = {
+    ok: true, updated: now,
+    count: merged.length,
+    latest: merged.length ? merged[0].t : null,
+    oldest: merged.length ? merged[merged.length - 1].t : null,
+    pace: pace, hot: hot, hotWindow: live.length,
+    important: merged.filter((n) => n.important).length,
+    dropped: newsImportantDropped,
+    sources: [
+      { key: '528btc', label: '币界网 528btc', n: a.length, ok: !!(b && b.ok), stale: !!(b && b.stale) },
+      { key: 'odaily', label: 'Odaily 星球日报', n: c.length, ok: !!(o && o.ok), stale: !!(o && o.stale) },
+    ],
+    stale: !!((b && b.stale) || (o && o.stale)),
+    news: merged,
+  };
+  cache.set('newsall', { at: Date.now(), val: val });
+  return val;
+}
+
+// ---------- 消息面：Odaily 星球日报快讯 ----------
+// https://www.odaily.news/zh-CN/newsflash 是 Next.js SSR 页面，
+// 没有公开 JSON 接口，但首屏数据会以 React Flight 的形式内联在
+// self.__next_f.push([1,"..."]) 里。每个片段本身就是一个合法的 JS 字符串
+// 字面量，所以用 JSON.parse 解码（不能拿正则替换引号，正文里有中文引号会被搞坏），
+// 拼起来之后在 "pageResult" 处做括号配平，就能拿到结构化列表。
+// ?page=N 可翻页，每页 16 条。
+const ODAILY_URL = 'https://www.odaily.news/zh-CN/newsflash';
+const ODAILY_TTL = 90000;
+const ODAILY_PAGES = 4;        // 4 页 = 64 条
+const ODAILY_CACHE_FILE = path.join(__dirname, '.odaily-cache.json');
+
+// 把 React Flight 片段拼成一段完整文本
+function flightText(html) {
+  let out = '';
+  const re = /self\.__next_f\.push\(\[1,("(?:[^"\\]|\\.)*")\]\)/g;
+  let m;
+  while ((m = re.exec(html))) {
+    try { out += JSON.parse(m[1]); } catch (e) { /* 坏块跳过 */ }
+  }
+  return out;
+}
+
+// 从拼接文本里按括号配平抠出 pageResult 对象（不能贪心匹配到文本末尾）
+function odailyPage(html) {
+  const dec = flightText(html);
+  const i = dec.indexOf('"pageResult"');
+  if (i < 0) return null;
+  const start = dec.lastIndexOf('{', i);
+  let depth = 0, end = -1, inStr = false, esc = false;
+  for (let k = start; k < dec.length; k++) {
+    const c = dec[k];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (c === '\\') esc = true;
+      else if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') { inStr = true; continue; }
+    if (c === '{') depth++;
+    else if (c === '}') { depth--; if (!depth) { end = k + 1; break; } }
+  }
+  if (end < 0) return null;
+  try {
+    const o = JSON.parse(dec.slice(start, end));
+    return o && o.pageResult ? o.pageResult : null;
+  } catch (e) { return null; }
+}
+
+function stripTags(s) {
+  return String(s || '')
+    .replace(/<\/p>\s*<p>/g, '\n')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]*>/g, '')
+    .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+    .trim();
+}
+
+async function fetchOdailyPage(page) {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 20000);
+  try {
+    const url = page === 1 ? ODAILY_URL : ODAILY_URL + '?page=' + page;
+    const res = await fetch(url, {
+      signal: ac.signal,
+      headers: { 'user-agent': NEWS_UA, 'accept-language': 'zh-CN,zh;q=0.9', 'accept': 'text/html' },
+    });
+    if (!res.ok) return null;
+    const q = odailyPage(await res.text());
+    return q ? q.list : null;
+  } catch (e) {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function getOdaily() {
+  const hit = cache.get('odaily');
+  if (hit && Date.now() - hit.at < ODAILY_TTL) return hit.val;
+
+  let items = [];
+  for (let p = 1; p <= ODAILY_PAGES; p++) {
+    const part = await fetchOdailyPage(p);
+    if (part && part.length) items = items.concat(part);
+  }
+  if (!items.length) {
+    const old = readJsonCache(ODAILY_CACHE_FILE);
+    if (old) return Object.assign({}, old, { stale: true });
+    return { ok: false, error: 'Odaily 快讯不可达' };
+  }
+
+  const seen = {}, out = [];
+  items.forEach((d) => {
+    const id = String(d.id);
+    if (seen[id] || !d.title) return;
+    seen[id] = 1;
+    out.push({
+      id: 'od-' + id,
+      t: +d.publishTimestamp,
+      title: String(d.title),
+      text: stripTags(d.description),
+      tags: odailyTags(d),
+      important: !!d.isImportant,
+      url: d.newsUrl || '',
+      source: 'odaily',
+    });
+  });
+  out.sort((a, b) => b.t - a.t);
+
+  const val = { ok: true, updated: Date.now(), count: out.length, news: out };
+  try { fs.writeFileSync(ODAILY_CACHE_FILE, JSON.stringify(val)); } catch (e) {}
+  cache.set('odaily', { at: Date.now(), val: val });
+  return val;
+}
+
+// Odaily 的 tags 基本都是空的，所以同样用标题+正文里出现的币种符号来打标
+function odailyTags(d) {
+  const out = [], seen = {};
+  const push = (s) => {
+    const u = String(s || '').toUpperCase();
+    if (NEWS_TAG_OK.has(u) && !seen[u]) { seen[u] = 1; out.push(u); }
+  };
+  const tags = d.tags;
+  if (tags && tags.length) {
+    for (let i = 0; i < tags.length; i++) push(tags[i] && (tags[i].symbol || tags[i].name || tags[i]));
+  }
+  const hay = String(d.title || '') + ' ' + String(d.description || '');
+  let m;
+  const re = /(?:\$|\b)([A-Z][A-Z0-9]{1,9})\b/g;
+  while ((m = re.exec(hay))) push(m[1]);
+  for (const k in NEWS_TAG_CN) { if (hay.indexOf(k) >= 0) push(NEWS_TAG_CN[k]); }
+  return out;
+}
+
+// 读任意 JSON 缓存文件
+function readJsonCache(file) {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { return null; }
+}
+
 // ---------- HTTP ----------
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
@@ -945,7 +1139,7 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/scan') return sendJSON(res, 200, await getScan());
     if (p === '/api/momentum') return sendJSON(res, 200, await getMomentum());
     if (p === '/api/stocks') return sendJSON(res, 200, await getStocks());
-    if (p === '/api/news') return sendJSON(res, 200, await getNews());
+    if (p === '/api/news') return sendJSON(res, 200, await getNewsAll());
     if (p === '/api/hyperliquid') return sendJSON(res, 200, await getHyperliquid());
     if (p === '/api/klines') {
       const symbol = (url.searchParams.get('symbol') || 'BTCUSDT').toUpperCase();

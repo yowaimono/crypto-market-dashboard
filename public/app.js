@@ -1176,7 +1176,8 @@ document.getElementById('stkTable').addEventListener('click', (e) => {
 // ============================================================
 const NEWS_WINS = [{ k: '1h', label: '近 1 小时' }, { k: '4h', label: '近 4 小时' }, { k: '24h', label: '近 24 小时' }];
 const NEWS_WIN_MS = { '1h': 3600000, '4h': 4 * 3600000, '24h': 24 * 3600000 };
-let newsWin = '4h', newsQuery = '', newsCoin = '', newsData = null;
+let newsWin = '4h', newsQuery = '', newsCoin = '', newsSrc = '', newsData = null;
+const NEWS_SRC = { '528btc': { label: '币界网', cls: 's528' }, 'odaily': { label: 'Odaily', cls: 'sod' } };
 // 只有币安真的在交易的币才做成可点标签，否则点了弹窗也是空的
 let tradingBases = null;
 
@@ -1190,6 +1191,7 @@ function newsShown() {
   const q = newsQuery.trim().toUpperCase();
   const cut = Date.now() - NEWS_WIN_MS[newsWin];
   return newsData.news.filter((n) => {
+    if (newsSrc && n.source !== newsSrc) return false;
     if (newsCoin && n.tags.indexOf(newsCoin) < 0) return false;
     // 选了币种就不受时间窗限制，否则容易筛出空列表
     if (!newsCoin && n.t < cut) return false;
@@ -1220,9 +1222,10 @@ function renderNews(d) {
   const top = (d.hot || [])[0];
   if (top) set('newsHot', top.s, '近 24h 被提及 ' + top.n + ' 次');
   document.getElementById('newsBadge').textContent = d.count + ' 条 · ' + (d.stale ? '缓存' : '实时');
-  document.getElementById('newsSub').innerHTML = d.source + ' · 数据源 528btc.com · 快照 '
+  const srcTxt = (d.sources || []).map((s) => s.label + ' ' + s.n + (s.stale ? '(缓存)' : '')).join(' ＋ ');
+  document.getElementById('newsSub').innerHTML = srcTxt + ' · 快照 '
     + new Date(d.updated).toLocaleTimeString('zh-CN', { hour12: false })
-    + (d.stale ? ' <span class="down">（接口不可达，显示上次缓存）</span>' : '');
+    + (d.stale ? ' <span class="down">（部分来源不可达，显示上次缓存）</span>' : '');
 
   // 热度条
   const hot = (d.hot || []).slice(0, 20);
@@ -1239,6 +1242,15 @@ function renderNews(d) {
   document.getElementById('newsWin').innerHTML = NEWS_WINS.map((w) =>
     '<button type="button" data-w="' + w.k + '"' + (w.k === newsWin ? ' class="on"' : '') + '>' + w.label + '</button>').join('');
 
+  // 来源筛选按钮（只在两个源都有数据时才显示）
+  const srcs = d.sources || [];
+  const srcSeg = document.getElementById('newsSrc');
+  srcSeg.innerHTML = srcs.filter((s) => s.n > 0).length > 1
+    ? ['<button type="button" data-src=""' + (newsSrc === '' ? ' class="on"' : '') + '>全部</button>']
+      .concat(srcs.map((s) => '<button type="button" data-src="' + s.key + '"' + (s.key === newsSrc ? ' class="on"' : '') + '>'
+        + (NEWS_SRC[s.key] ? NEWS_SRC[s.key].label : s.label) + ' ' + s.n + '</button>')).join('')
+    : '';
+
   // 时间线
   let html = '';
   let lastDay = '';
@@ -1252,9 +1264,11 @@ function renderNews(d) {
     const tags = n.tags.length
       ? '<div class="ntags">' + n.tags.map((s) => '<span class="ntag"' + newsTag(s) + '>' + s + '</span>').join('') + '</div>'
       : '';
+    const sm = NEWS_SRC[n.source] || { label: n.source, cls: '' };
     html += '<div class="nitem' + (n.important ? ' imp' : '') + '" data-id="' + n.id + '">'
       + '<div class="ntime"><b>' + pad2(dt.getHours()) + ':' + pad2(dt.getMinutes()) + '</b><span class="sub">' + relTime(n.t) + '</span></div>'
-      + '<div class="nbody"><div class="ntitle">' + (n.important ? '<span class="nstar">★</span>' : '') + escHtml(n.title) + '</div>'
+      + '<div class="nbody"><div class="ntitle">' + (n.important ? '<span class="nstar">★</span>' : '')
+      + '<span class="nsrc ' + sm.cls + '">' + sm.label + '</span>' + escHtml(n.title) + '</div>'
       + (n.text ? '<div class="ntext">' + escHtml(n.text) + '</div>' : '')
       + tags + '</div></div>';
   });
@@ -1305,6 +1319,12 @@ document.getElementById('newsWin').addEventListener('click', (e) => {
   const b = e.target.closest('button[data-w]');
   if (!b) return;
   newsWin = b.getAttribute('data-w');
+  if (newsData) renderNews(newsData);
+});
+document.getElementById('newsSrc').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-src]');
+  if (!b) return;
+  newsSrc = b.getAttribute('data-src');
   if (newsData) renderNews(newsData);
 });
 document.getElementById('newsHotbar').addEventListener('click', (e) => {
