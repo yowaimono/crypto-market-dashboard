@@ -221,6 +221,26 @@ table.tbl .rk { color: var(--muted-foreground); font-size: .74rem; }
 .vault-desc { margin-top: 14px; font-size: .78rem; color: var(--muted-foreground); line-height: 1.65; }
 .vault-addr { margin-top: 6px; font-size: .72rem; color: var(--muted-foreground); word-break: break-all; }
 
+/* ===== 实盘模拟 ===== */
+.paper-ctrl { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; }
+.paper-ctrl .pf { display: flex; align-items: center; gap: 7px; }
+.paper-ctrl .pf .select { width: 88px; }
+.paper-ctrl .pf input[type="text"] { width: 120px; }
+.paper-tbl td { white-space: nowrap; }
+.paper-tbl .coin { font-weight: 600; }
+.paper-tbl .coin:hover { color: var(--primary); }
+.paper-ops { display: flex; gap: 4px; }
+.btn-mini {
+  font: inherit; font-size: .68rem; padding: .2rem .45rem; line-height: 1.2;
+  border: 1px solid var(--border); background: var(--card); color: var(--foreground);
+  border-radius: 6px; cursor: pointer; transition: background 140ms ease-out;
+}
+.btn-mini:hover:not(:disabled) { background: var(--hover); border-color: var(--primary); }
+.btn-mini:disabled { opacity: .4; cursor: default; }
+.pevents { display: flex; flex-direction: column; gap: 1px; }
+.pevent { padding: 5px 7px; border-radius: 6px; font-size: .78rem; font-variant-numeric: tabular-nums; }
+.pevent:hover { background: var(--hover); }
+
 /* ===== 消息面 ===== */
 .news-scroll { max-height: 760px; }
 .hotbar { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 2px 20px; }

@@ -324,6 +324,54 @@
       </div>
     </section>
 
+    <section class="block">
+      <div class="block-head">
+        <div>
+          <h2>实盘模拟</h2>
+          <div class="sub" id="paperSub">设置好参数后点「开始模拟」，它会按你的周期持续监听行情、自动开平仓</div>
+        </div>
+        <span class="badge" id="paperBadge">—</span>
+      </div>
+
+      <div class="card">
+        <div class="paper-ctrl">
+          <label class="pf"><span class="sub">名称</span><input id="paperName" class="select" type="text" value="我的策略" maxlength="20"></label>
+          <label class="pf"><span class="sub">币种</span><select id="paperSymbol" class="select"></select></label>
+          <label class="pf"><span class="sub">周期</span><select id="paperIv" class="select">
+            <option value="1m">1m</option><option value="5m">5m</option>
+            <option value="15m" selected>15m</option><option value="30m">30m</option>
+            <option value="1h">1h</option><option value="4h">4h</option>
+          </select></label>
+          <label class="pf"><span class="sub">本金</span><input id="paperCap" class="select" type="number" value="1000" min="10" step="100"></label>
+          <label class="pf"><span class="sub">杠杆</span><input id="paperLev" class="select" type="number" value="1" min="1" max="100" step="1"></label>
+          <label class="pf"><span class="sub">仓位 %</span><input id="paperPos" class="select" type="number" value="100" min="1" max="100" step="5"></label>
+          <label class="pf"><span class="sub">手续费 ‰</span><input id="paperFee" class="select" type="number" value="0.5" min="0" max="5" step="0.1"></label>
+          <label class="switch"><input type="checkbox" id="paperShort"> 允许做空</label>
+          <span class="spacer"></span>
+          <button class="btn btn-primary" id="paperStart">开始模拟</button>
+          <button class="btn" id="paperRefresh">刷新</button>
+        </div>
+        <div class="sub" id="paperMsg" style="margin-top:10px">策略代码取自上方编辑框（改代码后重新点「开始模拟」会按新代码新建一个实例）</div>
+      </div>
+
+      <div id="paperList"></div>
+    </section>
+
+    <section class="block" id="paperDetailWrap" hidden>
+      <div class="block-head">
+        <div><h2 id="paperDetailName">—</h2><div class="sub" id="paperDetailSub">—</div></div>
+        <div class="controls">
+          <div class="seg" id="paperDetailActions"></div>
+        </div>
+      </div>
+      <div class="stats" id="paperDetailStats"></div>
+      <div class="card"><div class="chart-wrap" style="height:260px"><canvas id="paperEquity"></canvas></div></div>
+      <div class="cols">
+        <div class="card"><h3 class="h3">成交记录</h3><div class="scroll" style="max-height:380px"><div id="paperTrades"></div></div></div>
+        <div class="card"><h3 class="h3">事件流</h3><div class="scroll" style="max-height:380px"><div id="paperEvents"></div></div></div>
+      </div>
+    </section>
+
     <section class="stats" id="stratStats">
       <div class="stat"><div class="sub">总收益率</div><div class="stat-value" id="ssRet">—</div><div class="sub" id="ssRetSub">—</div></div>
       <div class="stat"><div class="sub">最终权益</div><div class="stat-value" id="ssEquity">—</div><div class="sub" id="ssEquitySub">—</div></div>
@@ -454,6 +502,7 @@
 </div>
 
 <script src="vendor/chart.umd.js"></script>
+<script src="strat-core.js"></script>
 <script src="app.js"></script>
 
 </body>

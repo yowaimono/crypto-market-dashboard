@@ -18,6 +18,9 @@ public/icons/
 .odaily-cache.json
 .jinse-cache.json
 
+# 实盘模拟状态（运行时持仓与成交记录，不入库）
+.paper-state.json
+
 # 系统文件
 Thumbs.db
 desktop.ini

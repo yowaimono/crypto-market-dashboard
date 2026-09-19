@@ -11,6 +11,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
+const paper = require('./paper');
 const { cgFetch } = require('./lib/coinglass');
 
 const PORT = Number(process.env.PORT || 8787);
@@ -1265,6 +1266,24 @@ function sendJSON(res, code, obj) {
   res.end(body);
 }
 
+// 读取并解析 JSON body（限制大小，防止误传大文件）
+function readBody(req, limit) {
+  return new Promise((resolve) => {
+    let n = 0, chunks = [];
+    req.on('data', (c) => {
+      n += c.length;
+      if (n > (limit || 200000)) { req.destroy(); resolve(null); return; }
+      chunks.push(c);
+    });
+    req.on('end', () => {
+      if (!chunks.length) return resolve({});
+      try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))); }
+      catch (e) { resolve(null); }
+    });
+    req.on('error', () => resolve(null));
+  });
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://' + HOST);
   const p = url.pathname;
@@ -1293,6 +1312,39 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/momentum') return sendJSON(res, 200, await getMomentum());
     if (p === '/api/stocks') return sendJSON(res, 200, await getStocks());
     if (p === '/api/news') return sendJSON(res, 200, await getNewsAll());
+
+    // ---------- 实盘模拟（paper trading）----------
+    if (p === '/api/paper') {
+      if (req.method === 'GET') return sendJSON(res, 200, paper.getState());
+      if (req.method === 'POST') {
+        const b = await readBody(req);
+        if (!b || !b.code) return sendJSON(res, 400, { ok: false, error: '缺少策略代码' });
+        // 先编译一次，语法错的直接拒掉，别让它进循环
+        try { require('./public/strat-core.js').compile(b.code); }
+        catch (e) { return sendJSON(res, 400, { ok: false, error: '策略语法错误: ' + e.message }); }
+        const inst = paper.createInstance(b);
+        paper.tickAll().catch(() => {});
+        return sendJSON(res, 200, { ok: true, id: inst.id, instance: paper.getState().instances.filter((x) => x.id === inst.id)[0] });
+      }
+      return sendJSON(res, 405, { ok: false, error: 'method' });
+    }
+    if (p.indexOf('/api/paper/') === 0) {
+      const rest = p.slice('/api/paper/'.length);
+      const slash = rest.indexOf('/');
+      const id = slash < 0 ? rest : rest.slice(0, slash);
+      const action = slash < 0 ? '' : rest.slice(slash + 1);
+      // 详情
+      if (!action && req.method === 'GET') {
+        const d = paper.getDetail(id);
+        return d ? sendJSON(res, 200, d) : sendJSON(res, 404, { ok: false, error: 'not found' });
+      }
+      if (req.method !== 'POST') return sendJSON(res, 405, { ok: false, error: 'method' });
+      if (action === 'pause' || action === 'resume') { paper.setRunning(id, action === 'resume'); return sendJSON(res, 200, paper.getState()); }
+      if (action === 'close') { paper.closeNow(id); return sendJSON(res, 200, paper.getDetail(id) || { ok: false }); }
+      if (action === 'reset') { paper.reset(id); paper.tickAll().catch(() => {}); return sendJSON(res, 200, paper.getState()); }
+      if (action === 'delete') { paper.removeInstance(id); return sendJSON(res, 200, paper.getState()); }
+      return sendJSON(res, 404, { ok: false, error: 'unknown action' });
+    }
     if (p === '/api/hyperliquid') return sendJSON(res, 200, await getHyperliquid());
     if (p === '/api/klines') {
       const symbol = (url.searchParams.get('symbol') || 'BTCUSDT').toUpperCase();
@@ -1350,4 +1402,13 @@ server.listen(PORT, HOST, () => {
       warmIcons().catch((e) => console.log('[icon] 预热失败 ' + e.message));
     })
     .catch((e) => console.log('[scan] 预热失败 ' + e.message));
+
+  // 实盘模拟：恢复上次的策略实例并立刻进入监听
+  try {
+    const st = paper.load();
+    console.log('[paper] 恢复 ' + st.instances.length + ' 个策略实例'
+      + (st.instances.length ? '（运行中 ' + st.instances.filter((x) => x.running).length + ' 个）' : ''));
+  } catch (e) { console.log('[paper] 状态恢复失败 ' + e.message); }
+  paper.tickAll().catch((e) => console.log('[paper] 首次推进失败 ' + e.message));
+  setInterval(() => { paper.tickAll().catch(() => {}); }, 10000);
 });

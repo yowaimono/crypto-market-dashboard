@@ -1836,205 +1836,45 @@ function stratMsg(t) {
   if (el) el.textContent = t;
 }
 
-// ---- 回测用指标序列 ----
-function hhvSeries(arr, n) {
-  const out = new Array(arr.length).fill(null);
-  for (let i = n - 1; i < arr.length; i++) {
-    let m = -Infinity;
-    for (let k = i - n + 1; k <= i; k++) if (arr[k] > m) m = arr[k];
-    out[i] = m;
-  }
-  return out;
-}
-function llvSeries(arr, n) {
-  const out = new Array(arr.length).fill(null);
-  for (let i = n - 1; i < arr.length; i++) {
-    let m = Infinity;
-    for (let k = i - n + 1; k <= i; k++) if (arr[k] < m) m = arr[k];
-    out[i] = m;
-  }
-  return out;
-}
-function atrSeries(candles, n) {
-  const out = new Array(candles.length).fill(null);
-  const trs = [];
-  for (let i = 0; i < candles.length; i++) {
-    const k = candles[i];
-    const pc = i > 0 ? candles[i - 1].c : k.c;
-    trs.push(Math.max(k.h - k.l, Math.abs(k.h - pc), Math.abs(k.l - pc)));
-  }
-  let sum = 0;
-  for (let i = 0; i < candles.length; i++) {
-    if (i < n) { sum += trs[i]; if (i === n - 1) out[i] = sum / n; }
-    else out[i] = (out[i - 1] * (n - 1) + trs[i]) / n;
-  }
-  return out;
-}
-
-// ---- 回测主流程 ----
+// ---- 回测：直接用 StratCore，与实盘模拟共用同一套指标与信号求值 ----
+// 这样「回测结果」和「实盘模拟结果」在口径上不可能对不上。
 function runStrategy() {
   const candles = stratState.candles;
   if (!candles || candles.length < 60) { stratMsg('K 线还没加载好，稍等一下再跑'); return; }
+  if (!window.StratCore) { stratMsg('策略引擎未加载（strat-core.js 缺失）'); return; }
+
   const capital = Math.max(100, +document.getElementById('stratCapital').value || 10000);
   const lev = Math.max(1, Math.min(100, +document.getElementById('stratLev').value || 1));
-  const fee = Math.max(0, (+document.getElementById('stratFee').value || 0) / 1000);
+  const feeRate = Math.max(0, (+document.getElementById('stratFee').value || 0) / 1000);
   const posPct = Math.max(0.01, Math.min(1, (+((document.getElementById('stratPos') || {}).value || 100)) / 100));
   const allowShort = document.getElementById('stratShort').checked;
   const code = document.getElementById('stratCode').value;
 
-  const closes = candles.map((k) => k.c);
-  const vols = candles.map((k) => k.v);
-  const st = { i: 0 };
-  const cache1 = {}, cacheB = {}, cacheM = {};
-  const ser = (kind, n) => {
-    const key = kind + n;
-    if (!cache1[key]) {
-      cache1[key] = kind === 'ma' ? sma(closes, n)
-        : kind === 'vma' ? sma(vols, n)          // 成交量均线（放量做空要用）
-        : kind === 'ema' ? emaSeries(closes, n)
-        : kind === 'rsi' ? rsiSeries(closes, n)
-        : kind === 'atr' ? atrSeries(candles, n)
-        : kind === 'hhv' ? hhvSeries(closes, n)
-        : llvSeries(closes, n);
-    }
-    return cache1[key];
-  };
-  const S = (arr) => ({
-    get v() { return arr[st.i]; },
-    get p() { return arr[st.i - 1]; },
-    at: (o) => arr[st.i - (o || 0)],
-  });
-  const MA = (n) => S(ser('ma', n));
-  const VMA = (n) => S(ser('vma', n));
-  const EMA = (n) => S(ser('ema', n));
-  const RSI = (n) => S(ser('rsi', n));
-  const ATR = (n) => S(ser('atr', n));
-  const highest = (n) => S(ser('hhv', n));
-  const lowest = (n) => S(ser('llv', n));
-  const BOLL = (n, k) => {
-    const key = n + '_' + k;
-    if (!cacheB[key]) cacheB[key] = bollSeries(closes, n, k);
-    const b = cacheB[key];
-    return { mid: S(b.mid), up: S(b.up), low: S(b.low) };
-  };
-  const MACD = (f, s, g) => {
-    const key = f + '_' + s + '_' + g;
-    if (!cacheM[key]) cacheM[key] = macdSeries(closes, f, s, g);
-    const m = cacheM[key];
-    return { dif: S(m.dif), dea: S(m.dea), hist: S(m.hist) };
-  };
-  const crossover = (x, y) => x.p !== null && y.p !== null && x.v !== null && y.v !== null && x.p <= y.p && x.v > y.v;
-  const crossunder = (x, y) => x.p !== null && y.p !== null && x.v !== null && y.v !== null && x.p >= y.p && x.v < y.v;
-  const price = S(closes);
-  const volume = S(vols);
-
-  let fn;
+  let r;
   try {
-    fn = new Function('MA', 'VMA', 'EMA', 'RSI', 'ATR', 'MACD', 'BOLL', 'crossover', 'crossunder',
-      'highest', 'lowest', 'price', 'volume', 'POS', 'i', 'ENTRY', 'BARS', code);
+    r = window.StratCore.backtest(candles, code, {
+      capital: capital, lev: lev, fee: feeRate, posPct: posPct,
+      allowShort: allowShort, warm: 210, slippage: 0.0002,
+    });
   } catch (e) {
-    stratMsg('策略语法错误：' + e.message);
+    stratMsg('策略执行失败：' + e.message);
     return;
   }
+  if (r.errMsg) stratMsg(r.errMsg);
 
-  const trades = [], marks = [], eq = [];
-  let pos = 0, qty = 0, entry = 0, entryIdx = 0, entryFee = 0, liqPx = null;
-  let cash = capital, peak = capital, maxDD = 0, liquidated = false, errMsg = null;
-  const warm = 25;
-
-  for (let i = warm; i < candles.length; i++) {
-    st.i = i;
-    let target;
-    try {
-      target = fn(MA, VMA, EMA, RSI, ATR, MACD, BOLL, crossover, crossunder, highest, lowest, price, volume, pos, i, pos !== 0 ? entry : 0, pos !== 0 ? (i - entryIdx) : 0);
-    } catch (e) { errMsg = '第 ' + i + ' 根执行出错：' + e.message; break; }
-    target = Math.round(Number(target) || 0);
-    if (target > 1) target = 1;
-    if (target < -1) target = -1;
-    if (!allowShort && target < 0) target = 0;
-
-    const bar = candles[i];
-    const px = bar.c;
-
-    // 爆仓（用本根的最低价/最高价判断）
-    if (pos !== 0 && liqPx !== null && ((pos > 0 && bar.l <= liqPx) || (pos < 0 && bar.h >= liqPx))) {
-      const gross = (liqPx - entry) * qty * (pos > 0 ? 1 : -1);
-      const feeOut = qty * liqPx * fee;
-      cash += gross - feeOut;
-      if (cash < 0) cash = 0;
-      trades.push({ openT: candles[entryIdx].t, closeT: bar.t, side: pos, entry: entry, exit: liqPx, qty: qty, pnl: gross - feeOut - entryFee, reason: '爆仓' });
-      marks.push({ i: i, kind: 'liq' });
-      eq.push({ t: bar.t, e: cash });
-      pos = 0; qty = 0; liqPx = null;
-      if (cash < capital * 0.01) { liquidated = true; break; } // 权益基本归零才算出局
-      continue; // 部分仓位下爆仓只亏该笔保证金，继续回测
-    }
-
-    if (target !== pos) {
-      if (pos !== 0) {
-        const gross = (px - entry) * qty * (pos > 0 ? 1 : -1);
-        const feeOut = qty * px * fee;
-        cash += gross - feeOut;
-        trades.push({ openT: candles[entryIdx].t, closeT: bar.t, side: pos, entry: entry, exit: px, qty: qty, pnl: gross - feeOut - entryFee, reason: '信号' });
-        marks.push({ i: i, kind: pos > 0 ? 'sell' : 'cover' });
-        pos = 0; qty = 0; liqPx = null;
-      }
-      if (target !== 0 && cash > 1) {
-        pos = target;
-        entry = px; entryIdx = i;
-        const notional = cash * lev * posPct;
-        qty = notional / px;
-        entryFee = notional * fee;
-        cash -= entryFee;
-        liqPx = pos > 0 ? entry * (1 - 1 / lev) : entry * (1 + 1 / lev);
-        marks.push({ i: i, kind: pos > 0 ? 'buy' : 'short' });
-      }
-    }
-
-    const unreal = pos !== 0 ? (px - entry) * qty * (pos > 0 ? 1 : -1) : 0;
-    const cur = cash + unreal;
-    if (cur > peak) peak = cur;
-    if (peak > 0) { const dd = (peak - cur) / peak; if (dd > maxDD) maxDD = dd; }
-    eq.push({ t: bar.t, e: cur });
-  }
-
-  // 末尾强制平仓
-  if (pos !== 0) {
-    const lastBar = candles[candles.length - 1];
-    const gross = (lastBar.c - entry) * qty * (pos > 0 ? 1 : -1);
-    const feeOut = qty * lastBar.c * fee;
-    cash += gross - feeOut;
-    trades.push({ openT: candles[entryIdx].t, closeT: lastBar.t, side: pos, entry: entry, exit: lastBar.c, qty: qty, pnl: gross - feeOut - entryFee, reason: '收盘平仓' });
-    marks.push({ i: candles.length - 1, kind: pos > 0 ? 'sell' : 'cover' });
-    pos = 0;
-  }
-
-  const finalEquity = liquidated ? cash : cash;
-  const wins = trades.filter((t) => t.pnl > 0);
-  const losses = trades.filter((t) => t.pnl <= 0);
-  const avgWin = wins.length ? wins.reduce((x, t) => x + t.pnl, 0) / wins.length : 0;
-  const avgLoss = losses.length ? Math.abs(losses.reduce((x, t) => x + t.pnl, 0) / losses.length) : 0;
-  const bh = closes[warm] ? (closes[closes.length - 1] / closes[warm] - 1) * 100 : null;
-
-  const res = {
-    capital, lev, fee, posPct, allowShort, finalEquity, liquidated, errMsg,
-    returnPct: finalEquity / capital * 100 - 100,
-    winRate: trades.length ? wins.length / trades.length * 100 : null,
-    pf: avgLoss > 0 ? avgWin / avgLoss : null,
-    maxDD: maxDD * 100,
-    trades: trades.length, buyHold: bh, avgWin, avgLoss,
-  };
-  stratState.marks = marks;
-  stratState.trades = trades;
-  stratState.eq = eq;
-  stratState.result = res;
-  renderStratStats(res);
-  renderStratTrades(trades);
-  renderStratEquityChart(eq);
+  stratState.marks = r.marks;
+  stratState.trades = r.tradeList;
+  stratState.eq = r.eq;
+  stratState.result = r;
+  renderStratStats(r);
+  renderStratTrades(r.tradeList);
+  renderStratEquityChart(r.eq);
   drawStrategyChart();
-  stratMsg('回测完成：' + candles.length + ' 根 ' + stratState.tf + ' · ' + trades.length + ' 笔交易'
-    + (liquidated ? ' · 已爆仓' : '') + (res.errMsg ? ' · ' + res.errMsg : ''));
+  stratMsg('回测完成：' + candles.length + ' 根 ' + stratState.tf + ' · ' + r.trades + ' 笔交易'
+    + (r.liquidated ? ' · 已爆仓' : '') + (r.errMsg ? ' · ' + r.errMsg : ''));
 }
+
+
 
 // ---- 渲染 ----
 function renderStratStats(r) {
@@ -2171,9 +2011,229 @@ function applyRangeDays(days) {
   loadStratKlines();
 }
 
+// ============================================================
+// 实盘模拟（paper trading）
+// 后端 paper.js 按实例自己的周期轮询行情、跑与回测同一份策略代码，
+// 这里负责下单参数、列表、详情、权益曲线。
+// ============================================================
+let paperState = null, paperDetail = null, paperTimer = null, paperEqChart = null;
+
+function fmtMoney(v) {
+  if (v === null || v === undefined || isNaN(v)) return '—';
+  return (v < 0 ? '-$' : '$') + Math.abs(v).toLocaleString('en-US', { maximumFractionDigits: 2 });
+}
+function durText(ms) {
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return s + ' 秒';
+  if (s < 3600) return Math.floor(s / 60) + ' 分钟';
+  if (s < 86400) return (s / 3600).toFixed(1) + ' 小时';
+  return (s / 86400).toFixed(1) + ' 天';
+}
+const PAPER_STATUS = (i) => !i.running ? '<span class="down">已停止</span>'
+  : (i.pos > 0 ? '<span class="up">持多</span>' : i.pos < 0 ? '<span class="down">持空</span>' : '观望中');
+
+function renderPaperList(s) {
+  const box = document.getElementById('paperList');
+  if (!s.instances.length) {
+    box.innerHTML = '<div class="card"><div class="sub" style="padding:16px">还没有运行中的实例。设置好参数点「开始模拟」即可。</div></div>';
+    document.getElementById('paperBadge').textContent = '0 个实例';
+    return;
+  }
+  document.getElementById('paperBadge').textContent = s.instances.length + ' 个实例 · '
+    + s.instances.filter((x) => x.running).length + ' 运行中';
+  let html = '<div class="card"><div class="scroll"><table class="tbl paper-tbl"><thead><tr>'
+    + '<th>名称</th><th>标的</th><th>状态</th><th>本金</th><th>权益</th><th>收益</th><th>浮盈</th>'
+    + '<th>持仓</th><th>笔数</th><th>胜率</th><th>回撤</th><th>运行</th><th>心跳</th><th>操作</th>'
+    + '</tr></thead><tbody>';
+  s.instances.forEach((i) => {
+    html += '<tr data-pid="' + i.id + '">'
+      + '<td><span class="coin" data-pdetail="' + i.id + '">' + escHtml(i.name) + '</span></td>'
+      + '<td>' + escHtml(i.symbol.replace(/USDT$/, '')) + ' <span class="sub">' + i.interval + '</span></td>'
+      + '<td>' + PAPER_STATUS(i) + '</td>'
+      + '<td>' + fmtMoney(i.capital) + '</td>'
+      + '<td><b>' + fmtMoney(i.equity) + '</b></td>'
+      + '<td class="' + signClass(i.returnPct) + '">' + (i.returnPct >= 0 ? '+' : '') + i.returnPct.toFixed(2) + '%</td>'
+      + '<td class="' + signClass(i.unreal) + '">' + (i.pos ? fmtMoney(i.unreal) : '—') + '</td>'
+      + '<td>' + (i.pos ? (i.pos > 0 ? '多 ' : '空 ') + i.qty.toFixed(6) + ' @ ' + fmtPrice(i.entry) : '—') + '</td>'
+      + '<td>' + i.trades + '</td>'
+      + '<td>' + (i.winRate === null ? '—' : i.winRate.toFixed(0) + '%') + '</td>'
+      + '<td>' + i.maxDD.toFixed(1) + '%</td>'
+      + '<td>' + durText(i.ageMs) + '</td>'
+      + '<td>' + i.ticks + (i.lastError ? ' <span class="down" title="' + escAttr(i.lastError) + '">!</span>' : '') + '</td>'
+      + '<td class="paper-ops">'
+      + '<button class="btn btn-mini" data-pop="' + (i.running ? 'pause' : 'resume') + '" data-pid="' + i.id + '">' + (i.running ? '暂停' : '继续') + '</button>'
+      + '<button class="btn btn-mini" data-pop="close" data-pid="' + i.id + '"' + (i.pos ? '' : ' disabled') + '>平仓</button>'
+      + '<button class="btn btn-mini" data-pop="reset" data-pid="' + i.id + '">重置</button>'
+      + '<button class="btn btn-mini" data-pop="delete" data-pid="' + i.id + '">删除</button>'
+      + '</td></tr>';
+  });
+  box.innerHTML = html + '</tbody></table></div></div>';
+}
+
+async function loadPaper(quiet) {
+  try {
+    const s = await fetchJSON('/api/paper');
+    paperState = s;
+    renderPaperList(s);
+    if (paperDetail && s.instances.filter((x) => x.id === paperDetail).length) await loadPaperDetail(paperDetail, true);
+    if (!quiet) document.getElementById('paperSub').textContent =
+      '监听中 · 后端每 10 秒推进一次 · 最后更新 ' + new Date(s.updated || Date.now()).toLocaleTimeString('zh-CN', { hour12: false });
+  } catch (e) {
+    document.getElementById('paperSub').textContent = '实盘模拟不可达：' + e.message;
+  }
+}
+
+async function loadPaperDetail(id, quiet) {
+  paperDetail = id;
+  try {
+    const d = await fetchJSON('/api/paper/' + id);
+    const s = d.summary;
+    document.getElementById('paperDetailWrap').hidden = false;
+    document.getElementById('paperDetailName').textContent = s.name + ' · ' + s.symbol.replace(/USDT$/, '') + ' ' + s.interval;
+    document.getElementById('paperDetailSub').innerHTML =
+      '本金 ' + fmtMoney(s.capital) + ' · ' + s.lev + 'x · 仓位 ' + Math.round(s.posPct * 100) + '% · '
+      + (s.allowShort ? '可做空' : '仅做多') + ' · 运行 ' + durText(s.ageMs)
+      + (s.lastError ? ' · <span class="down">' + escHtml(s.lastError) + '</span>' : '');
+    document.getElementById('paperDetailActions').innerHTML =
+      '<button class="btn btn-mini" data-pop="' + (s.running ? 'pause' : 'resume') + '" data-pid="' + id + '">' + (s.running ? '暂停' : '继续') + '</button>'
+      + '<button class="btn btn-mini" data-pop="close" data-pid="' + id + '"' + (s.pos ? '' : ' disabled') + '>立即平仓</button>'
+      + '<button class="btn btn-mini" data-pop="reset" data-pid="' + id + '">重置</button>'
+      + '<button class="btn btn-mini" data-pop="hide" data-pid="' + id + '">收起</button>';
+    const cell = (label, val, sub, cls) => '<div class="stat"><div class="sub">' + label + '</div><div class="stat-value ' + (cls || '') + '">' + val + '</div><div class="sub">' + (sub || '') + '</div></div>';
+    document.getElementById('paperDetailStats').innerHTML = cell('权益', fmtMoney(s.equity), '本金 ' + fmtMoney(s.capital))
+      + cell('收益', (s.returnPct >= 0 ? '+' : '') + s.returnPct.toFixed(2) + '%', '已实现+浮动', signClass(s.returnPct))
+      + cell('浮动盈亏', s.pos ? fmtMoney(s.unreal) : '—', s.pos ? (s.pos > 0 ? '多单' : '空单') + ' @ ' + fmtPrice(s.entry) : '空仓', signClass(s.unreal))
+      + cell('最新价', fmtPrice(s.lastPrice), s.liqPx ? '强平 ' + fmtPrice(s.liqPx) : '未持仓')
+      + cell('成交笔数', s.trades, s.winRate === null ? '—' : '胜率 ' + s.winRate.toFixed(1) + '%')
+      + cell('盈亏比', s.pf === null ? '—' : s.pf.toFixed(2), '平均盈利 ÷ 平均亏损')
+      + cell('最大回撤', s.maxDD.toFixed(2) + '%', '峰值回撤')
+      + cell('心跳 / 信号', s.ticks + ' / ' + s.signals, '当前信号 ' + s.lastSignal);
+    renderPaperEquity(d.eq);
+    renderPaperTrades(d.trades);
+    renderPaperEvents(d.events);
+  } catch (e) {
+    if (!quiet) document.getElementById('paperDetailSub').textContent = '详情加载失败：' + e.message;
+  }
+}
+
+function renderPaperEquity(eq) {
+  const cv = document.getElementById('paperEquity');
+  if (!cv || !eq || !eq.length) return;
+  const labels = eq.map((p) => new Date(p.t).toLocaleTimeString('zh-CN', { hour12: false }));
+  const data = eq.map((p) => +p.e.toFixed(2));
+  if (paperEqChart) {
+    paperEqChart.data.labels = labels;
+    paperEqChart.data.datasets[0].data = data;
+    paperEqChart.update('none');
+    return;
+  }
+  paperEqChart = new Chart(cv, {
+    type: 'line',
+    data: { labels: labels, datasets: [{ label: '权益', data: data, borderColor: C.s1, backgroundColor: withAlpha(C.s1, 0.12), fill: true, borderWidth: 2, pointRadius: 0, tension: 0.2 }] },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => '$' + Number(c.parsed.y).toLocaleString('en-US') } } },
+      scales: { x: { grid: { display: false }, ticks: { maxTicksLimit: 6 } }, y: { grid: { color: C.border }, ticks: { maxTicksLimit: 6 } } },
+      interaction: { mode: 'index', intersect: false },
+    },
+  });
+}
+
+function renderPaperTrades(tr) {
+  if (!tr || !tr.length) { document.getElementById('paperTrades').innerHTML = '<div class="sub" style="padding:14px">还没有成交</div>'; return; }
+  let html = '<table class="tbl"><thead><tr><th>#</th><th>方向</th><th>开仓时间</th><th>开仓价</th><th>平仓时间</th><th>平仓价</th><th>盈亏</th><th>原因</th></tr></thead><tbody>';
+  tr.forEach((t, i) => {
+    html += '<tr><td class="rk">' + (i + 1) + '</td>'
+      + '<td>' + (t.side > 0 ? '<span class="up">多</span>' : '<span class="down">空</span>') + '</td>'
+      + '<td class="sub-cell">' + fmtFullTime(t.openT) + '</td><td>' + fmtPrice(t.entry) + '</td>'
+      + '<td class="sub-cell">' + fmtFullTime(t.closeT) + '</td><td>' + fmtPrice(t.exit) + '</td>'
+      + '<td class="' + signClass(t.pnl) + '">' + (t.pnl >= 0 ? '+' : '-') + '$' + Math.abs(t.pnl).toFixed(2) + '</td>'
+      + '<td class="sub-cell">' + escHtml(t.reason) + '</td></tr>';
+  });
+  document.getElementById('paperTrades').innerHTML = html + '</tbody></table>';
+}
+
+function renderPaperEvents(ev) {
+  if (!ev || !ev.length) { document.getElementById('paperEvents').innerHTML = '<div class="sub" style="padding:14px">还没有事件</div>'; return; }
+  const label = { open: '开仓', close: '平仓', liq: '爆仓' };
+  document.getElementById('paperEvents').innerHTML = '<div class="pevents">' + ev.map((e) =>
+    '<div class="pevent"><span class="sub">' + new Date(e.t).toLocaleTimeString('zh-CN', { hour12: false }) + '</span> '
+    + '<b class="' + (e.side > 0 ? 'up' : 'down') + '">' + (label[e.type] || e.type) + (e.side > 0 ? '多' : '空') + '</b> '
+    + '@ ' + fmtPrice(e.price)
+    + (e.pnl !== undefined && e.pnl !== null ? ' <span class="' + signClass(e.pnl) + '">' + (e.pnl >= 0 ? '+' : '-') + '$' + Math.abs(e.pnl).toFixed(2) + '</span>' : '')
+    + (e.reason ? ' <span class="sub">' + escHtml(e.reason) + '</span>' : '') + '</div>').join('') + '</div>';
+}
+
+async function paperCreate() {
+  const code = document.getElementById('stratCode').value;
+  if (!code.trim()) { document.getElementById('paperMsg').textContent = '请先在上方填写策略代码'; return; }
+  const body = {
+    name: document.getElementById('paperName').value || '我的策略',
+    symbol: document.getElementById('paperSymbol').value || 'BTCUSDT',
+    interval: document.getElementById('paperIv').value,
+    capital: +document.getElementById('paperCap').value || 1000,
+    lev: +document.getElementById('paperLev').value || 1,
+    posPct: (+document.getElementById('paperPos').value || 100) / 100,
+    fee: (+document.getElementById('paperFee').value || 0.5) / 1000,
+    allowShort: document.getElementById('paperShort').checked,
+    code: code,
+  };
+  document.getElementById('paperStart').disabled = true;
+  try {
+    const r = await fetch('/api/paper', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || 'HTTP ' + r.status);
+    document.getElementById('paperMsg').textContent = '已开始模拟（' + body.symbol.replace(/USDT$/, '') + ' ' + body.interval
+      + '，本金 ' + fmtMoney(body.capital) + '，' + body.lev + 'x）· 每 ' + body.interval + ' 收线时判一次信号';
+    await loadPaper(true);
+    await loadPaperDetail(j.id);
+  } catch (e) {
+    document.getElementById('paperMsg').textContent = '创建失败：' + e.message;
+  } finally {
+    document.getElementById('paperStart').disabled = false;
+  }
+}
+
+async function paperOp(op, id) {
+  if (op === 'hide') { document.getElementById('paperDetailWrap').hidden = true; paperDetail = null; return; }
+  try {
+    await fetch('/api/paper/' + id + '/' + op, { method: 'POST' });
+    if (op === 'delete') { document.getElementById('paperDetailWrap').hidden = true; paperDetail = null; }
+    await loadPaper(true);
+    if (paperDetail && op !== 'delete') await loadPaperDetail(paperDetail, true);
+  } catch (e) {
+    document.getElementById('paperMsg').textContent = '操作失败：' + e.message;
+  }
+}
+
+document.getElementById('paperStart').addEventListener('click', paperCreate);
+document.getElementById('paperRefresh').addEventListener('click', () => loadPaper(false));
+document.getElementById('paperList').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-pop]');
+  if (btn) { e.stopPropagation(); paperOp(btn.getAttribute('data-pop'), btn.getAttribute('data-pid')); return; }
+  const link = e.target.closest('[data-pdetail]');
+  if (link) loadPaperDetail(link.getAttribute('data-pdetail'));
+});
+document.getElementById('paperDetailActions').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-pop]');
+  if (b) paperOp(b.getAttribute('data-pop'), b.getAttribute('data-pid'));
+});
+
+function initPaper() {
+  const sel = document.getElementById('paperSymbol');
+  if (!sel.options.length) {
+    sel.innerHTML = STRAT_SYMBOLS.map((s) => '<option value="' + s + '">' + s.replace(/USDT$/, '') + ' / USDT</option>').join('');
+    sel.value = stratState.symbol;
+  }
+  loadPaper(true);
+  if (paperTimer) clearInterval(paperTimer);
+  paperTimer = setInterval(() => { if (state.view === 'strategy') loadPaper(true); }, 5000);
+}
+
 function onStrategyView() {
   if (!stratState.inited) {
     stratState.inited = true;
+    initPaper();
     const symSel = document.getElementById('stratSymbol');
     symSel.innerHTML = STRAT_SYMBOLS.map((s) => '<option value="' + s + '">' + s.replace(/USDT$/, '') + ' / USDT</option>').join('');
     symSel.value = stratState.symbol;
