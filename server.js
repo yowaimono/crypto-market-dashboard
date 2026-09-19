@@ -353,6 +353,154 @@ async function getMomentum() {
   });
 }
 
+// ---------- 币股（Binance 代币化股票 / ETF）----------
+// Binance 现货把代币化股票统一挂在 "XXXXB/USDT" 上：AAPLB=苹果、NVDAB=英伟达、SPYB=标普500。
+// exchangeInfo 里没有任何「这是股票」的字段，只能靠 B 后缀 + 排除本来就叫 XXXB 的加密货币。
+// 名称逐条对过 Nasdaq 官方接口（76/76 全部对应真实上市公司/ETF）。
+// 这里只放展示用的代号与板块；币种集合仍从 exchangeInfo 动态取，将来新上的票会自动出现。
+const CRYPTO_ENDING_B = new Set(['BNB', 'DGB', 'TRB', 'CKB', 'SHIB', 'ARB', 'BB', 'YB', 'MUB']);
+const STOCK_META = {
+  // 半导体
+  NVDAB: ['NVDA', '英伟达', 'semi'], TSMB: ['TSM', '台积电', 'semi'], AVGOB: ['AVGO', '博通', 'semi'],
+  AMDB: ['AMD', '超威半导体', 'semi'], AMATB: ['AMAT', '应用材料', 'semi'], ASMLB: ['ASML', '阿斯麦', 'semi'],
+  ARMB: ['ARM', 'Arm控股', 'semi'], MRVLB: ['MRVL', '迈威尔', 'semi'], QCOMB: ['QCOM', '高通', 'semi'],
+  INTCB: ['INTC', '英特尔', 'semi'], SKHYB: ['SKHY', 'SK海力士', 'semi'], LITEB: ['LITE', 'Lumentum', 'semi'],
+  COHRB: ['COHR', '相干公司', 'semi'], CRDOB: ['CRDO', 'Credo', 'semi'], AAOIB: ['AAOI', '应用光电', 'semi'],
+  AXTIB: ['AXTI', 'AXT', 'semi'], ALABB: ['ALAB', 'Astera Labs', 'semi'], CBRSB: ['CBRS', 'Cerebras', 'semi'],
+  // 科技硬件
+  AAPLB: ['AAPL', '苹果', 'tech'], MSFTB: ['MSFT', '微软', 'soft'], GOOGLB: ['GOOGL', '谷歌', 'net'],
+  METAB: ['META', 'Meta', 'net'], AMZNB: ['AMZN', '亚马逊', 'net'], NFLXB: ['NFLX', '奈飞', 'net'],
+  TSLAB: ['TSLA', '特斯拉', 'tech'], IBMB: ['IBM', 'IBM', 'tech'], DELLB: ['DELL', '戴尔', 'tech'],
+  SMCIB: ['SMCI', '超微电脑', 'tech'], STXB: ['STX', '希捷', 'tech'], WDCB: ['WDC', '西部数据', 'tech'],
+  SNDKB: ['SNDK', '闪迪', 'tech'], GLWB: ['GLW', '康宁', 'tech'], NOKB: ['NOK', '诺基亚', 'tech'],
+  GPROB: ['GPRO', 'GoPro', 'tech'], QNTB: ['QNT', 'Quantinuum', 'tech'],
+  // 软件 / 云
+  ORCLB: ['ORCL', '甲骨文', 'soft'], CRMB: ['CRM', '赛富时', 'soft'], PLTRB: ['PLTR', 'Palantir', 'soft'],
+  CRWDB: ['CRWD', 'CrowdStrike', 'soft'], CRWVB: ['CRWV', 'CoreWeave', 'soft'], NBISB: ['NBIS', 'Nebius', 'soft'],
+  // 互联网 / 平台
+  BABAB: ['BABA', '阿里巴巴', 'net'], RDDTB: ['RDDT', 'Reddit', 'net'], GMEB: ['GME', '游戏驿站', 'net'],
+  DJTB: ['DJT', '特朗普媒体', 'net'],
+  // 金融 / 加密相关
+  COINB: ['COIN', 'Coinbase', 'crypto'], CRCLB: ['CRCL', 'Circle', 'crypto'], MSTRB: ['MSTR', 'Strategy', 'crypto'],
+  BMNRB: ['BMNR', 'BitMine', 'crypto'], BNCB: ['BNC', 'CEA Industries', 'crypto'], IRENB: ['IREN', 'IREN', 'crypto'],
+  HOODB: ['HOOD', 'Robinhood', 'fin'], GSB: ['GS', '高盛', 'fin'], PYPLB: ['PYPL', 'PayPal', 'fin'],
+  // 医疗
+  MRNAB: ['MRNA', 'Moderna', 'health'], HIMSB: ['HIMS', 'Hims & Hers', 'health'],
+  // 航天 / 工业
+  SPCXB: ['SPCX', 'SpaceX', 'space'], RKLBB: ['RKLB', '火箭实验室', 'space'], ASTSB: ['ASTS', 'AST太空移动', 'space'],
+  BEB: ['BE', 'Bloom Energy', 'energy'], FLNCB: ['FLNC', 'Fluence', 'energy'], USARB: ['USAR', 'USA Rare Earth', 'other'],
+  // 指数 ETF
+  SPYB: ['SPY', '标普500 ETF', 'index'], QQQB: ['QQQ', '纳指100 ETF', 'index'],
+  SMHB: ['SMH', '半导体 ETF', 'index'], EWYB: ['EWY', '韩国 ETF', 'index'], DRAMB: ['DRAM', '存储 ETF', 'index'],
+  // 杠杆 / 反向 ETF
+  TQQQB: ['TQQQ', '纳指3倍做多', 'lev'], SQQQB: ['SQQQ', '纳指3倍做空', 'lev'],
+  SOXLB: ['SOXL', '半导体3倍做多', 'lev'], SOXSB: ['SOXS', '半导体3倍做空', 'lev'],
+  KORUB: ['KORU', '韩国3倍做多', 'lev'], INTWB: ['INTW', '英特尔2倍做多', 'lev'],
+  MUUB: ['MUU', '美光2倍做多', 'lev'], MVLLB: ['MVLL', '迈威尔2倍做多', 'lev'],
+  SNXXB: ['SNXX', '闪迪2倍做多', 'lev'],
+};
+const STOCK_SECTORS = {
+  semi: '半导体', tech: '科技硬件', soft: '软件云', net: '互联网平台',
+  crypto: '加密相关', fin: '金融', health: '医疗', space: '航天工业',
+  energy: '能源', index: '指数 ETF', lev: '杠杆 ETF', other: '其他',
+};
+
+// 动态取「当前在交易的币股」，元数据缺失的也照样上榜（用代号兜底）
+async function getStockUniverse() {
+  return getCached('stockuniverse', 600000, async () => {
+    const info = await fetchJSON(VISION + '/exchangeInfo', 60000);
+    const out = [];
+    for (let i = 0; i < info.symbols.length; i++) {
+      const s = info.symbols[i];
+      if (s.status !== 'TRADING' || s.quoteAsset !== 'USDT') continue;
+      const b = s.baseAsset;
+      if (!/B$/.test(b) || CRYPTO_ENDING_B.has(b)) continue;
+      const m = STOCK_META[b];
+      out.push({
+        symbol: s.symbol, base: b,
+        ticker: m ? m[0] : b.slice(0, -1),   // 元数据里没有的，去掉 B 当代号
+        name: m ? m[1] : b, sector: m ? m[2] : 'other',
+      });
+    }
+    out.sort((a, b) => (a.ticker < b.ticker ? -1 : a.ticker > b.ticker ? 1 : 0));
+    return out;
+  });
+}
+
+// 币股行情：复用加密货币那套动量/波动率算法（实测这些代币 7x24 连续成交，5m 无跳空）
+async function getStocks() {
+  const uni = await getStockUniverse();
+  const symbols = uni.map((u) => u.symbol);
+  return getCached('stocks:' + symbols.length, 15000, async () => {
+    let bySym = {};
+    try {
+      const tickers = await fetchJSON(VISION + '/ticker/24hr?symbols=' + encodeURIComponent(JSON.stringify(symbols)), 40000);
+      for (let i = 0; i < (tickers || []).length; i++) bySym[tickers[i].symbol] = tickers[i];
+    } catch (e) { bySym = {}; }
+
+    const coins = [], failed = [];
+    for (let i = 0; i < uni.length; i += 6) {
+      const chunk = uni.slice(i, i + 6);
+      const part = await Promise.all(chunk.map(async (u) => {
+        try {
+          const ks = await visionKlines(u.symbol, '5m', 500);
+          if (Date.now() - (ks[ks.length - 1].t + 300000) > 15 * 60000) throw new Error('K线陈旧');
+          const a = momAnalyze(u.symbol, ks, bySym[u.symbol] || null);
+          a.ticker = u.ticker; a.name = u.name; a.sector = u.sector;
+          return a;
+        } catch (e) {
+          return { symbol: u.symbol, base: u.base, ticker: u.ticker, error: String(e.message || e) };
+        }
+      }));
+      for (let k = 0; k < part.length; k++) {
+        if (part[k].error) failed.push(part[k].ticker);
+        else coins.push(part[k]);
+      }
+    }
+    coins.sort((a, b) => (b.vol24h || 0) - (a.vol24h || 0));
+
+    // 板块聚合：等权收益 + 上涨家数占比 + 平均波动
+    const sec = {};
+    for (let i = 0; i < coins.length; i++) {
+      const c = coins[i];
+      const g = sec[c.sector] || (sec[c.sector] = { key: c.sector, n: 0, sum: {}, cnt: {}, up: {}, rv: 0, qv: 0 });
+      g.n++; g.qv += (c.vol24h || 0); g.rv += c.rv1h;
+      for (let h = 0; h < HORIZONS.length; h++) {
+        const L = HORIZONS[h][0], v = c.rets[L];
+        if (v === null || v === undefined) continue;
+        g.sum[L] = (g.sum[L] || 0) + v;
+        g.cnt[L] = (g.cnt[L] || 0) + 1;
+        g.up[L] = (g.up[L] || 0) + (v > 0 ? 1 : 0);
+      }
+    }
+    const sectors = Object.keys(sec).map((k) => {
+      const g = sec[k], avg = {}, upPct = {};
+      for (let h = 0; h < HORIZONS.length; h++) {
+        const L = HORIZONS[h][0], n = g.cnt[L] || 0;
+        avg[L] = n ? g.sum[L] / n : 0;
+        upPct[L] = n ? (g.up[L] / n) * 100 : 0;
+      }
+      return { key: g.key, label: STOCK_SECTORS[g.key] || g.key, n: g.n, avg: avg, upPct: upPct,
+        rv1h: g.n ? g.rv / g.n : 0, vol24h: g.qv };
+    }).sort((a, b) => (b.avg['1h'] || 0) - (a.avg['1h'] || 0));
+
+    const breadth = {}, avgReturn = {};
+    for (let i = 0; i < HORIZONS.length; i++) {
+      const L = HORIZONS[i][0];
+      const vals = coins.map((c) => c.rets[L]).filter((v) => v !== null && v !== undefined);
+      const up = vals.filter((v) => v > 0).length;
+      breadth[L] = { up: up, total: vals.length, upPct: vals.length ? (up / vals.length) * 100 : 0 };
+      avgReturn[L] = vals.length ? sumOf(vals) / vals.length : 0;
+    }
+    return {
+      ok: true, updated: Date.now(), count: coins.length, failed: failed,
+      universe: uni.length, horizons: HORIZONS.map((h) => h[0]),
+      coins: coins, sectors: sectors, breadth: breadth, avgReturn: avgReturn,
+      vol24h: sumOf(coins.map((c) => c.vol24h || 0)),
+    };
+  });
+}
+
 // ---------- Hyperliquid 鲸鱼监控（CoinGlass）----------
 // 板块结构对齐 https://www.coinglass.com/zh/hyperliquid ：
 //   鲸鱼持仓总览 / 大户持仓 / 最新鲸鱼动态 / 持仓人数多空比
@@ -592,6 +740,7 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/market') return sendJSON(res, 200, await getMarket());
     if (p === '/api/scan') return sendJSON(res, 200, await getScan());
     if (p === '/api/momentum') return sendJSON(res, 200, await getMomentum());
+    if (p === '/api/stocks') return sendJSON(res, 200, await getStocks());
     if (p === '/api/hyperliquid') return sendJSON(res, 200, await getHyperliquid());
     if (p === '/api/klines') {
       const symbol = (url.searchParams.get('symbol') || 'BTCUSDT').toUpperCase();
@@ -612,7 +761,8 @@ const server = http.createServer(async (req, res) => {
       return sendJSON(res, 200, { ok: true, symbol: symbol, interval: interval, candles: candles, updated: Date.now() });
     }
     if (p === '/api/health') {
-      const [scan, trading] = await Promise.all([getScan().catch(() => null), getTradingSet()]);
+      const [scan, trading, stockUni] = await Promise.all([
+        getScan().catch(() => null), getTradingSet(), getStockUniverse().catch(() => [])]);
       const alive = WATCHLIST.filter((s) => trading[s]);
       const baseSet = {};
       alive.forEach((s) => { baseSet[s.replace(/USDT$/, '')] = 1; });
@@ -620,6 +770,7 @@ const server = http.createServer(async (req, res) => {
       return sendJSON(res, 200, {
         ok: true, ts: Date.now(), intervals: INTERVALS,
         symbols: alive.concat(dyn), watchlist: alive, dynamic: dyn,
+        stocks: stockUni.map((u) => ({ symbol: u.symbol, ticker: u.ticker, name: u.name })),
       });
     }
 

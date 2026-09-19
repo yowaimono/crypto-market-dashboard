@@ -1011,9 +1011,168 @@ function timeShort(t) {
   return pad2(d.getHours()) + ':' + pad2(d.getMinutes());
 }
 
+// ============================================================
+// 币股行情（Binance 代币化股票 / ETF）
+// 数据源就是 Binance 现货的 XXXXB/USDT 交易对，7x24 连续成交，
+// 所以直接复用加密货币那套多周期动量 + 波动率算法。
+// ============================================================
+const STK_COLS = [
+  { k: '5m', label: '5m' }, { k: '15m', label: '15m' }, { k: '30m', label: '30m' },
+  { k: '1h', label: '1h' }, { k: '4h', label: '4h' }, { k: '12h', label: '12h' },
+];
+let stkSector = 'all', stkQuery = '', stkSort = '1h', stocksData = null;
+
+// 板块名 -> 稳定色相，让轮动表一眼能区分
+const SECTOR_HUE = { semi: 210, tech: 190, soft: 262, net: 232, crypto: 32, fin: 152, health: 340, space: 278, energy: 48, index: 0, lev: 300, other: 100 };
+function sectorStyle(key) {
+  const h = SECTOR_HUE[key] === undefined ? 100 : SECTOR_HUE[key];
+  return 'background:hsl(' + h + ', 62%, 46% / .14);border-left:3px solid hsl(' + h + ',62%,46%)';
+}
+
+function stkFiltered(d) {
+  const q = stkQuery.trim().toUpperCase();
+  let list = d.coins;
+  if (stkSector !== 'all') list = list.filter((c) => c.sector === stkSector);
+  if (q) list = list.filter((c) => (c.ticker + ' ' + c.name + ' ' + c.base).toUpperCase().indexOf(q) >= 0);
+  return list;
+}
+
+// 显示用真实股票代号（NVDA），但图标必须按币安的真实 base（NVDAB）取
+// —— 币安 logo 库里存的是 NVDAB.png，用 NVDA 查会全部 404 退化成色块
+function stkIcon(c, size) {
+  return ciHtml(c.base, size);
+}
+
+function renderStocks(d) {
+  const b1 = d.breadth['1h'] || { up: 0, total: 0 };
+  const b24 = d.breadth['24h'] || { up: 0, total: 0 };
+  const set = (id, val, sub) => {
+    document.getElementById(id).textContent = val;
+    document.getElementById(id + 'Sub').innerHTML = sub;
+  };
+  set('stkCount', d.count + ' 个', d.failed.length ? '<span class="down">' + d.failed.length + ' 个取数失败</span>' : 'Binance 现货代币化股票');
+  set('stkVol', fmtCap(d.vol24h), '24 小时成交额');
+  set('stkUp1h', b1.up + '/' + b1.total, '占 ' + b1.upPct.toFixed(0) + '%');
+  set('stkUp24', b24.up + '/' + b24.total, '占 ' + b24.upPct.toFixed(0) + '%');
+
+  const secs = d.sectors || [];
+  const hot = secs[0], cold = secs[secs.length - 1];
+  if (hot) set('stkHot', hot.label, '<span class="' + signClass(hot.avg['1h']) + '">1h ' + fmtPct(hot.avg['1h']) + '</span> · 24h ' + fmtPct(hot.avg['24h']));
+  const king = d.coins.slice().sort((a, b) => b.rv1h - a.rv1h)[0];
+  if (king) set('stkVolKing', king.ticker, '波动 ' + king.rv1h.toFixed(2) + '%/日');
+
+  document.getElementById('stkSectorTabs').innerHTML = [{ key: 'all', label: '全部', n: d.count }].concat(secs)
+    .map((s) => '<button type="button" data-sec="' + s.key + '"' + (s.key === stkSector ? ' class="on"' : '') + '>' + s.label + (s.n ? ' ' + s.n : '') + '</button>').join('');
+  document.getElementById('stkBadge').textContent = d.count + ' 标的 · 5m 聚合';
+  document.getElementById('stkSub').innerHTML = 'Binance 现货代币化股票 / ETF · 7x24 连续成交 · 数据源 Binance Vision · 快照 '
+    + new Date(d.updated).toLocaleTimeString('zh-CN', { hour12: false });
+
+  renderStkSectors(d);
+  renderStkTable(d);
+
+  const label = stkSector === 'all' ? '全部标的' : (secs.filter((s) => s.key === stkSector)[0] || {}).label || stkSector;
+  const list = stkFiltered(d).slice().sort((a, b) => (b.rets['1h'] || 0) - (a.rets['1h'] || 0));
+  if (list.length) {
+    const lead = list[0], lag = list[list.length - 1];
+    const byM5 = stkFiltered(d).slice().sort((a, b) => (b.rets['5m'] || 0) - (a.rets['5m'] || 0))[0];
+    document.getElementById('stkLead').innerHTML = [
+      label + ' 1h 领涨 <b>' + lead.ticker + '</b> ' + fmtPct(lead.rets['1h']) + ' <span class="sub">' + lead.name + '</span>',
+      '领跌 <b>' + lag.ticker + '</b> ' + fmtPct(lag.rets['1h']),
+      '5m 最猛 <b>' + byM5.ticker + '</b> ' + fmtPct(byM5.rets['5m']),
+    ].join(' ｜ ');
+  } else {
+    document.getElementById('stkLead').textContent = '没有匹配的标的';
+  }
+}
+
+function renderStkSectors(d) {
+  const secs = (d.sectors || []).slice();
+  if (!secs.length) { document.getElementById('stkSectors').innerHTML = '<div class="sub">暂无数据</div>'; return; }
+  let html = '<table class="heat stk-sec"><thead><tr><th>板块</th><th>标的</th>';
+  STK_COLS.forEach((c) => { html += '<th>' + c.label + '</th>'; });
+  html += '<th>1h上涨</th><th>1h波动</th><th>24h成交额</th></tr></thead><tbody>';
+  secs.forEach((s) => {
+    html += '<tr><td class="sym" style="' + sectorStyle(s.key) + '">' + s.label + '</td><td>' + s.n + '</td>';
+    STK_COLS.forEach((c) => {
+      const v = s.avg[c.k];
+      html += '<td class="' + signClass(v) + '">' + fmtPct(v) + '</td>';
+    });
+    html += '<td>' + s.upPct['1h'].toFixed(0) + '%</td>'
+      + '<td>' + s.rv1h.toFixed(2) + '%</td>'
+      + '<td>' + fmtCap(s.vol24h) + '</td></tr>';
+  });
+  html += '</tbody></table>';
+  document.getElementById('stkSectors').innerHTML = html;
+}
+
+function renderStkTable(d) {
+  const val = (c) => (c.rets && c.rets[stkSort] !== undefined ? c.rets[stkSort] : c[stkSort]) || 0;
+  const list = stkFiltered(d).slice().sort((a, b) => val(b) - val(a));
+  let html = '<table class="tbl scan"><thead><tr><th>#</th><th>标的</th><th>价格</th>';
+  STK_COLS.forEach((c) => { html += '<th class="sorth' + (c.k === stkSort ? ' on' : '') + '" data-sort="' + c.k + '">' + c.label + '</th>'; });
+  html += '<th class="sorth' + (stkSort === 'chg24' ? ' on' : '') + '" data-sort="chg24">24h</th>'
+    + '<th>24h 成交额</th>'
+    + '<th class="sorth' + (stkSort === 'rv1h' ? ' on' : '') + '" data-sort="rv1h">1h波动</th>'
+    + '<th>区间位置</th></tr></thead><tbody>';
+  list.forEach((c, i) => {
+    html += '<tr data-sym="' + escAttr(c.symbol) + '" data-kline-sym="' + escAttr(c.symbol) + '"><td class="rk">' + (i + 1) + '</td>'
+      + '<td><span class="cc">' + stkIcon(c, 'sm')
+      + '<span class="stk-tk">' + escAttr(c.ticker) + '</span></span>'
+      + '<span class="name">' + escAttr(c.name) + '</span></td>'
+      + '<td>' + fmtPrice(c.price) + '</td>';
+    STK_COLS.forEach((col) => {
+      html += '<td class="' + (col.k === stkSort ? 'hi ' : '') + signClass(c.rets[col.k]) + '">' + fmtPct(c.rets[col.k]) + '</td>';
+    });
+    html += '<td class="' + signClass(c.chg24) + '">' + fmtPct(c.chg24) + '</td>'
+      + '<td>' + fmtCap(c.vol24h) + '</td>'
+      + '<td>' + c.rv1h.toFixed(2) + '%</td>'
+      + '<td>' + (c.pos24h === null ? '—' : c.pos24h.toFixed(0) + '%') + '</td></tr>';
+  });
+  html += '</tbody></table>';
+  document.getElementById('stkTable').innerHTML = html;
+  document.getElementById('stkTableSub').textContent = stkSort + ' 排序 · 点任意一行看 K 线';
+  document.getElementById('stkFoot').textContent = '显示 ' + list.length + ' / ' + d.count + ' 个标的'
+    + (stkSector === 'all' ? '' : '（板块：' + ((d.sectors.filter((s) => s.key === stkSector)[0] || {}).label || stkSector) + '）')
+    + (stkQuery ? '（搜索：' + stkQuery + '）' : '');
+}
+
+async function loadStocks() {
+  try {
+    const d = await fetchJSON('/api/stocks');
+    if (!d.ok || !d.coins.length) throw new Error(d.error || 'no data');
+    stocksData = d;
+    renderStocks(d);
+  } catch (e) {
+    document.getElementById('stkSub').textContent = '币股数据不可达：' + e.message;
+    document.getElementById('stkLead').textContent = '加载失败：' + e.message;
+  }
+}
+
+document.getElementById('stkSearch').addEventListener('input', (e) => {
+  stkQuery = e.target.value || '';
+  if (stocksData) renderStkTable(stocksData);
+});
+document.getElementById('stkSectorTabs').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-sec]');
+  if (!b || !stocksData) return;
+  stkSector = b.getAttribute('data-sec');
+  Array.prototype.forEach.call(e.currentTarget.querySelectorAll('button'), (o) => { o.className = (o === b) ? 'on' : ''; });
+  renderStocks(stocksData);
+});
+document.getElementById('stkTable').addEventListener('click', (e) => {
+  const th = e.target.closest('th[data-sort]');
+  if (th) {
+    stkSort = th.getAttribute('data-sort');
+    if (stocksData) renderStkTable(stocksData);
+    return;
+  }
+  const tr = e.target.closest('tr[data-sym]');
+  if (tr) openKlineModal(tr.getAttribute('data-sym'));
+});
+
 function switchView(name) {
   state.view = name;
-  ['market', 'hyperliquid', 'strategy'].forEach((v) => {
+  ['market', 'hyperliquid', 'strategy', 'stocks'].forEach((v) => {
     const el = document.getElementById('view-' + v);
     if (el) el.hidden = (v !== name);
   });
@@ -1025,6 +1184,8 @@ function switchView(name) {
     else loadHyperliquid();
   } else if (name === 'strategy') {
     onStrategyView();
+  } else if (name === 'stocks') {
+    loadStocks();
   } else if (state.candles.length) {
     drawKline(); // canvas 在隐藏时尺寸为 0，切回来必须重画
   }
@@ -1183,6 +1344,10 @@ function buildModalTf() {
 function openKlineModal(sym) {
   const pair = pairOf(sym);
   if (!pair) return;
+  // 币股：下拉框里标上真实代号，别让人看到 NVDAB 猜半天
+  const stk = stocksData && stocksData.coins.filter((c) => c.symbol === pair)[0];
+  if (stk) renameOption(pair, stk.ticker + ' · ' + stk.name);
+  else ensureOption(pair, '（扫描）');
   modalState.sym = pair;
   modalState.candles = [];
   modalState.hover = null;
@@ -1789,6 +1954,14 @@ function ensureOption(sym, tag) {
   return true;
 }
 
+// 改下拉框里某个 option 的显示文字（币股用真实代号替换 NVDAB 这种）
+function renameOption(sym, label) {
+  const sel = document.getElementById('symbolSelect');
+  Array.prototype.forEach.call(sel.options, (o) => {
+    if (o.value === sym) o.textContent = label;
+  });
+}
+
 // 扫描表点一行 -> 直接切到该币 K 线（即使它不在观察名单里）
 function setKlineSymbol(sym) {
   ensureOption(sym, '（扫描）');
@@ -1838,6 +2011,7 @@ function setupAuto() {
   timers.push(setInterval(loadKlines, 6000));
   timers.push(setInterval(loadScan, 60000));
   timers.push(setInterval(() => { if (state.view === 'hyperliquid') loadHyperliquid(); }, 20000));
+  timers.push(setInterval(() => { if (state.view === 'stocks') loadStocks(); }, 30000));
 }
 
 async function init() {
@@ -1873,7 +2047,7 @@ async function init() {
   // 支持 ?view=hyperliquid 直接打进 Hyperliquid 标签页
   try {
     const vq = new URLSearchParams(location.search).get('view');
-    if (vq === 'hyperliquid' || vq === 'strategy') switchView(vq);
+    if (vq === 'hyperliquid' || vq === 'strategy' || vq === 'stocks') switchView(vq);
   } catch (e) {}
 
   loadMarket(); loadMomentum(); loadKlines(); loadScan();

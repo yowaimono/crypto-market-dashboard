@@ -221,6 +221,16 @@ table.tbl .rk { color: var(--muted-foreground); font-size: .74rem; }
 .vault-desc { margin-top: 14px; font-size: .78rem; color: var(--muted-foreground); line-height: 1.65; }
 .vault-addr { margin-top: 6px; font-size: .72rem; color: var(--muted-foreground); word-break: break-all; }
 
+/* ===== 币股行情 ===== */
+.stk-tk { font-weight: 700; letter-spacing: .01em; }
+table.stk-sec td:first-child, table.stk-sec th:first-child { padding-left: 9px; border-radius: 4px; }
+table.heat th.sorth { cursor: pointer; user-select: none; }
+table.heat th.sorth:hover { color: var(--foreground); }
+table.heat th.sorth.on { color: var(--primary); font-weight: 700; }
+#stkTable table.tbl td .name { display: inline; margin-left: 6px; }
+#stkTable table.tbl td:first-child { white-space: nowrap; }
+#stkSectorTabs { flex-wrap: wrap; }
+
 /* ===== 币种图标 ===== */
 .ci {
   position: relative; display: inline-block; flex: 0 0 auto;

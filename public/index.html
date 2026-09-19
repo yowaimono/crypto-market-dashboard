@@ -41,6 +41,7 @@
     <button type="button" class="mtab on" data-view="market">大盘行情</button>
     <button type="button" class="mtab" data-view="hyperliquid">Hyperliquid</button>
     <button type="button" class="mtab" data-view="strategy">策略模拟盘</button>
+    <button type="button" class="mtab" data-view="stocks">币股行情</button>
   </nav>
 
   <div id="view-market">
@@ -348,6 +349,49 @@
       <div class="card"><div class="scroll strat-trades"><div id="stratTrades"></div></div></div>
     </section>
   </div><!-- /view-strategy -->
+
+  <div id="view-stocks" hidden>
+
+    <section class="block">
+      <div class="block-head">
+        <div>
+          <h2>币股行情</h2>
+          <div class="sub" id="stkSub">加载中…</div>
+        </div>
+        <span class="badge" id="stkBadge">—</span>
+      </div>
+      <div class="stats">
+        <div class="stat"><div class="sub">标的数</div><div class="stat-value" id="stkCount">—</div><div class="sub" id="stkCountSub">—</div></div>
+        <div class="stat"><div class="sub">24h 成交额</div><div class="stat-value" id="stkVol">—</div><div class="sub" id="stkVolSub">—</div></div>
+        <div class="stat"><div class="sub">1h 上涨</div><div class="stat-value" id="stkUp1h">—</div><div class="sub" id="stkUp1hSub">—</div></div>
+        <div class="stat"><div class="sub">24h 上涨</div><div class="stat-value" id="stkUp24">—</div><div class="sub" id="stkUp24Sub">—</div></div>
+        <div class="stat"><div class="sub">领涨板块</div><div class="stat-value" id="stkHot">—</div><div class="sub" id="stkHotSub">—</div></div>
+        <div class="stat"><div class="sub">波动最猛</div><div class="stat-value" id="stkVolKing">—</div><div class="sub" id="stkVolKingSub">—</div></div>
+      </div>
+    </section>
+
+    <section class="block">
+      <div class="block-head">
+        <div><h2>板块轮动</h2><div class="sub">板块内等权平均涨跌幅 · 按 1h 动量排序 · 绿涨红跌</div></div>
+      </div>
+      <div class="card"><div class="scroll"><div id="stkSectors"></div></div></div>
+    </section>
+
+    <section class="block">
+      <div class="block-head">
+        <div><h2>个券行情</h2><div class="sub" id="stkTableSub">点击任意一行看 K 线</div></div>
+        <div class="controls">
+          <div class="seg" id="stkSectorTabs" role="group" aria-label="板块筛选"></div>
+          <input id="stkSearch" class="select search" type="search" placeholder="搜索，如 NVDA / 英伟达" autocomplete="off" spellcheck="false">
+        </div>
+      </div>
+      <div class="conclusion" id="stkLead">加载中…</div>
+      <div class="card">
+        <div class="scroll"><div id="stkTable"></div></div>
+        <div class="sub" id="stkFoot" style="margin-top:10px"></div>
+      </div>
+    </section>
+  </div><!-- /view-stocks -->
 
   <footer class="foot">
     本地后端代理 · 零外部 CDN 依赖 · 仅供看盘参考，非投资建议
