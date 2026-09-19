@@ -44,6 +44,64 @@ async function fetchJSON(url) {
 }
 function pad2(n) { return String(n).padStart(2, '0'); }
 
+// ============================================================
+// 币种图标：每个币都尽量给一张真图标
+//   后端 /api/icon 依次尝试 币安 logo 库(经 wsrv 代理) -> CoinLore，
+//   命中即落盘并长缓存；真拿不到的退化成首字母色块（保证列表里每行都有图标）
+// ============================================================
+const ICON_OK = Object.create(null);   // 已知有真图标的
+const ICON_BAD = Object.create(null);  // 已知没有的，直接走首字母，不再发请求
+function baseOf(sym) {
+  const s = String(sym || '').toUpperCase();
+  const stripped = s.replace(/USDT$/, '');
+  return stripped || s; // 币种本身就是 USDT 时，不能剥成空串
+}
+// "1000CAT" 这种显示成 "1KCAT"，省得把整列撑开
+function iconLabel(base) { return base.replace(/^1000/, '1K'); }
+// 由币种名稳定地生成一个色相，保证首字母色块不会一片灰
+const CI_HUES = [210, 160, 28, 276, 340, 190, 45, 118, 0, 300];
+function ciHue(base) {
+  let h = 0;
+  for (let i = 0; i < base.length; i++) h = (h * 31 + base.charCodeAt(i)) >>> 0;
+  return CI_HUES[h % CI_HUES.length];
+}
+function ciHtml(sym, size) {
+  const b = baseOf(sym);
+  if (!b) return '';
+  const cls = 'ci' + (size ? ' ci-' + size : '');
+  const label = iconLabel(b);
+  const src = ICON_BAD[b] ? '' : '/api/icon?base=' + encodeURIComponent(b);
+  const font = label.length > 2 ? 5.6 : 7.4; // 3 个字符要缩一号才塞得下
+  const fallback = '<svg viewBox="0 0 18 18" width="100%" height="100%" aria-hidden="true"><rect width="18" height="18" fill="hsl(' + ciHue(b) + ', 52%, 42%)"/>'
+    + '<text x="9" y="12.6" font-size="' + font + '" text-anchor="middle" fill="#fff" font-family="system-ui,-apple-system,Segoe UI,sans-serif" font-weight="700">'
+    + escAttr(label.slice(0, 3)) + '</text></svg>';
+  return '<span class="' + cls + '">' + fallback
+    + '<img src="' + src + '" alt="" loading="lazy" decoding="async"'
+    + ' onerror="iconFail(this)" onload="iconLoad(this)"></span>';
+}
+// 图标取到了：把底下的首字母藏起来
+function iconLoad(img) {
+  const b = baseOf((img.getAttribute('src') || '').replace(/^.*base=/, ''));
+  if (b) ICON_OK[b] = 1;
+  img.previousElementSibling.style.display = 'none';
+}
+// 取不到：记下来，之后都用首字母，省掉无意义的请求
+function iconFail(img) {
+  const b = baseOf((img.getAttribute('src') || '').replace(/^.*base=/, ''));
+  if (b) ICON_BAD[b] = 1;
+  img.style.display = 'none';
+}
+function escAttr(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+// 币种格：图标 + 可点击的代号
+function coinCell(sym, label, size, clickable) {
+  const txt = escAttr(label === undefined ? baseOf(sym) : label);
+  return '<span class="cc">' + ciHtml(sym, size)
+    + (clickable === false ? '<span class="sym">' + txt + '</span>'
+       : '<span class="coin sym" data-kline="' + escAttr(sym) + '">' + txt + '</span>') + '</span>';
+}
+
 const state = { view: 'market', symbol: 'BTCUSDT', interval: '5m', candles: [], hover: null, market: null, momentum: null, scan: null };
 
 // 主题色（canvas / Chart.js 都读不到 CSS 变量，只能探测后缓存）
@@ -150,7 +208,7 @@ function renderTable(coins) {
   const rows = coins.slice(0, 10);
   let html = '';
   rows.forEach((c) => {
-    html += '<tr><td><span class="coin sym" data-kline="' + c.s + 'USDT">' + c.s + '</span> <span class="name">' + c.n + '</span></td>'
+    html += '<tr><td>' + coinCell(c.s + 'USDT', c.s) + ' <span class="name">' + c.n + '</span></td>'
       + '<td>' + fmtPrice(c.p) + '</td>'
       + '<td class="' + signClass(c.c1) + '">' + fmtPct(c.c1) + '</td>'
       + '<td class="' + signClass(c.c24) + '">' + fmtPct(c.c24) + '</td>'
@@ -248,7 +306,7 @@ function renderHeat(d) {
   rows.forEach((c) => {
     const acc = c.volAccel || 1;
     const accTxt = '<span class="' + (acc >= 1.2 ? 'up' : acc <= 0.8 ? 'down' : '') + '">×' + acc.toFixed(1) + '</span>';
-    html += '<tr><td class="sym">' + (c.dyn ? '<span class="dot" title="扫描发现的异动币"></span>' : '') + '<span class="coin" data-kline="' + c.symbol + '">' + c.base + '</span></td>';
+    html += '<tr><td class="sym">' + (c.dyn ? '<span class="dot" title="扫描发现的异动币"></span>' : '') + coinCell(c.symbol, c.base) + '</td>';
     d.horizons.forEach((h) => {
       html += '<td style="background:' + heatBg(c.rets[h], scale[h]) + '">' + fmtPct(c.rets[h]) + '</td>';
     });
@@ -269,7 +327,7 @@ function renderVolBars(d) {
     const exTxt = (ex >= 1.25 ? '扩 ' : ex <= 0.8 ? '收 ' : '') + ex.toFixed(2) + '×';
     html += '<div class="vrow">'
       + '<span class="rk">' + (i + 1) + '</span>'
-      + '<span class="sym">' + c.base + '</span>'
+      + '<span class="cc">' + ciHtml(c.symbol, 'sm') + '<span class="sym">' + c.base + '</span></span>'
       + '<span class="track"><span class="bar" style="width:' + w.toFixed(1) + '%"></span></span>'
       + '<span class="val">' + c.rv1h.toFixed(2) + '%</span>'
       + '<span class="chip ' + cls + '" title="近 1 小时波动 ÷ 近 24 小时波动">' + exTxt + '</span>'
@@ -387,7 +445,7 @@ function renderScan(d) {
   html += '<th>24h</th><th>24h 成交额</th><th>1h波动</th><th>量能</th></tr></thead><tbody>';
   rows.forEach((c, i) => {
     html += '<tr data-sym="' + c.sym + '"><td class="rk">' + (i + 1) + '</td>'
-      + '<td><span class="coin sym" data-kline="' + c.sym + '">' + c.s + '</span></td><td>' + fmtPrice(c.p) + '</td>';
+      + '<td>' + coinCell(c.sym, c.s) + '</td><td>' + fmtPrice(c.p) + '</td>';
     SCAN_COLS.forEach((col) => {
       html += '<td class="' + (col.k === scanHorizon ? 'hi ' : '') + signClass(c[col.k]) + '">' + fmtPct(c[col.k]) + '</td>';
     });
@@ -899,6 +957,10 @@ function renderKlineHead() {
   const last = body[body.length - 1];
   const first = body[0];
   const chg = first.o ? (last.c / first.o - 1) * 100 : null;
+  const b = baseOf(state.symbol);
+  document.getElementById('klineName').innerHTML = ciHtml(state.symbol, 'lg')
+    + '<span class="coin" data-kline="' + escAttr(state.symbol) + '">' + escAttr(b) + '</span>'
+    + '<span class="name"> / USDT</span>';
   document.getElementById('klinePrice').textContent = fmtPrice(last.c);
   const el = document.getElementById('klineChange');
   el.className = 'sub ' + signClass(chg);
@@ -993,7 +1055,7 @@ function renderHlPositions(d) {
   (d.positions || []).forEach((p, i) => {
     html += '<tr><td class="rk">' + (i + 1) + '</td>'
       + '<td class="mono">' + addrLink(p.user) + '</td>'
-      + '<td><span class="sym">' + p.coin + '</span></td>'
+      + '<td>' + coinCell(p.coin, p.coin, 'sm', false) + '</td>'
       + '<td>' + (p.long ? '<span class="up">多</span>' : '<span class="down">空</span>')
       + ' <span class="lev">' + p.lev + 'x</span></td>'
       + '<td>' + fmtCap(p.posUsd) + '</td>'
@@ -1017,7 +1079,7 @@ function renderHlActions(d) {
   (d.actions || []).slice(0, HL_ACTIONS).forEach((a) => {
     const cls = a.state === 1 ? (a.long ? 'up' : 'down') : 'muted';
     html += '<tr><td class="mono">' + addrLink(a.user) + '</td>'
-      + '<td><span class="sym">' + a.coin + '</span></td>'
+      + '<td>' + coinCell(a.coin, a.coin, 'sm', false) + '</td>'
       + '<td class="' + cls + '">' + actionLabel(a.state, a.long) + '</td>'
       + '<td>' + fmtCap(a.posUsd) + '</td>'
       + '<td>' + fmtPrice(a.price) + '</td>'
@@ -1031,7 +1093,7 @@ function renderHlRatios(d) {
   const rows = d.ratios || [];
   let html = '';
   rows.forEach((r) => {
-    html += '<div class="rrow"><span class="sym">' + r.coin + '</span>'
+    html += '<div class="rrow">' + coinCell(r.coin, r.coin, 'sm', false)
       + '<span class="rbar"><i class="rl" style="width:' + r.longPct.toFixed(1) + '%"></i>'
       + '<i class="rs" style="width:' + (100 - r.longPct).toFixed(1) + '%"></i></span>'
       + '<span class="rp up">' + r.longPct.toFixed(2) + '%</span>'
@@ -1124,7 +1186,8 @@ function openKlineModal(sym) {
   modalState.sym = pair;
   modalState.candles = [];
   modalState.hover = null;
-  document.getElementById('modalSymbol').textContent = pair.replace(/USDT$/, '') + ' / USDT';
+  document.getElementById('modalSymbol').innerHTML = ciHtml(pair, 'lg')
+    + '<span>' + escAttr(baseOf(pair)) + '</span><span class="name"> / USDT</span>';
   document.getElementById('modalPrice').textContent = '加载中…';
   document.getElementById('modalOhlc').innerHTML = '';
   document.getElementById('modalNote').textContent = '加载中…';

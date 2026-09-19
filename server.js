@@ -442,6 +442,114 @@ async function getHyperliquid() {
   });
 }
 
+// ---------- 币种图标 ----------
+// 每个币都尽量给一张真图标。链路：
+//   1) bin.bnbstatic.com（币安自家 logo 库，全世界最全：连美股代币、中文名币都有）
+//      —— 本机 DNS 解析不了这个域名，所以套一层 wsrv.nl 图片代理转发
+//   2) 兑不到就退回 CoinLore 的 nameid 图标
+//   3) 都拿不到 -> 404，前端退化成首字母色块
+// 命中后落盘到 public/icons/，7 天有效，之后全走本地磁盘，不再打网络。
+const ICON_DIR = path.join(PUBLIC_DIR, 'icons');
+try { fs.mkdirSync(ICON_DIR, { recursive: true }); } catch (e) {}
+const iconInflight = new Map();
+
+// 币安 logo 库的文件名就是币种代号，且存在中文名的币（币安人生 / 牛来），
+// 所以这里保留 ASCII 字母数字 + 汉字，其余一律剔除
+function safeBase(b) {
+  return String(b || '').toUpperCase().replace(/[^A-Z0-9\u4e00-\u9fa5]/g, '').slice(0, 24);
+}
+// 中文名不能直接当文件名，给非 ASCII 的代号生成一个稳定的哈希名
+function iconFile(b) {
+  if (/^[A-Z0-9]+$/.test(b)) return path.join(ICON_DIR, b + '.png');
+  let h = 2166136261;
+  for (let i = 0; i < b.length; i++) { h ^= b.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+  return path.join(ICON_DIR, 'u' + h.toString(16) + '.png');
+}
+
+// CoinLore: symbol -> nameid（图标文件名），缓存 6 小时，只做兜底用
+function getLoreNames() {
+  return getCached('lorenames', 6 * 3600 * 1000, async () => {
+    const map = {};
+    for (let start = 0; start < 4000; start += 100) {
+      let j;
+      try { j = await fetchJSON('https://api.coinlore.net/api/tickers/?start=' + start + '&limit=100', 20000); }
+      catch (e) { break; }
+      const rows = (j && j.data) || [];
+      if (!rows.length) break;
+      for (let k = 0; k < rows.length; k++) {
+        const s = String(rows[k].symbol || '').toUpperCase();
+        if (s && !map[s]) map[s] = rows[k].nameid;
+      }
+      if (rows.length < 100) break;
+    }
+    return map;
+  });
+}
+
+async function fetchImage(url, timeoutMs) {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), timeoutMs || 15000);
+  try {
+    const res = await fetch(url, { signal: ac.signal, headers: { 'User-Agent': 'crypto-market-dashboard/1.0' } });
+    if (!res.ok) return null;
+    if (!/^image\//.test(res.headers.get('content-type') || '')) return null;
+    const buf = Buffer.from(await res.arrayBuffer());
+    return buf.length > 120 ? buf : null;
+  } catch (e) {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function iconBytes(base) {
+  const b = safeBase(base);
+  if (!b) return Promise.resolve(null);
+  const file = iconFile(b);
+  try {
+    const st = fs.statSync(file);
+    if (st.size > 120) return Promise.resolve(fs.readFileSync(file));
+  } catch (e) { /* 没缓存，往下走 */ }
+  if (iconInflight.has(b)) return iconInflight.get(b); // 同一张图并发只打一次网络
+
+  const task = (async () => {
+    const upstream = 'bin.bnbstatic.com/static/assets/logos/' + b + '.png';
+    let buf = await fetchImage(
+      'https://wsrv.nl/?url=' + encodeURIComponent(upstream) + '&w=64&h=64&fit=cover&output=png', 15000);
+    if (!buf) {
+      try {
+        const nid = (await getLoreNames())[b];
+        if (nid) buf = await fetchImage('https://www.coinlore.com/img/' + encodeURIComponent(nid) + '.png', 12000);
+      } catch (e) { /* 兜底失败就算了 */ }
+    }
+    if (buf) { try { fs.writeFileSync(file, buf); } catch (e) {} }
+    return buf || null;
+  })().finally(() => iconInflight.delete(b));
+
+  iconInflight.set(b, task);
+  return task;
+}
+
+// 预热：只补磁盘上没有的，避免首次打开表格时每张图都在转圈
+async function warmIcons() {
+  let uni;
+  try { uni = await getUniverse(); } catch (e) { return; }
+  const bases = [], seen = {};
+  for (let i = 0; i < uni.list.length; i++) {
+    const b = uni.list[i].base;
+    if (!seen[b]) { seen[b] = 1; bases.push(b); }
+  }
+  let i = 0, ok = 0;
+  const workers = new Array(6).fill(0).map(async () => {
+    while (i < bases.length) {
+      const b = bases[i++];
+      try { if (await iconBytes(b)) ok++; } catch (e) {}
+    }
+  });
+  await Promise.all(workers);
+  console.log('[icon] 预热完成 ' + ok + '/' + bases.length + ' 个币种图标');
+}
+
 // ---------- HTTP ----------
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
@@ -462,6 +570,25 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://' + HOST);
   const p = url.pathname;
   try {
+    if (p === '/api/icon') {
+      // 任意币种图标：命中缓存直接吐磁盘，没有就去取，取不到给前端一个明确的 404
+      const raw = (url.searchParams.get('base') || url.searchParams.get('symbol') || '').trim();
+      // 传 USDTUSDT 之类的交易对也没关系；但 base 本身就等于 USDT 时不能剥成空串
+      const stripped = raw.replace(/USDT$/i, '');
+      const base = stripped || raw;
+      const buf = await iconBytes(base).catch(() => null);
+      if (!buf) {
+        res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
+        return res.end('no icon');
+      }
+      res.writeHead(200, {
+        'Content-Type': 'image/png',
+        'Cache-Control': 'public, max-age=604800, immutable',
+        'Access-Control-Allow-Origin': '*',
+        'Content-Length': buf.length,
+      });
+      return res.end(buf);
+    }
     if (p === '/api/market') return sendJSON(res, 200, await getMarket());
     if (p === '/api/scan') return sendJSON(res, 200, await getScan());
     if (p === '/api/momentum') return sendJSON(res, 200, await getMomentum());
@@ -501,7 +628,9 @@ const server = http.createServer(async (req, res) => {
     if (fp.indexOf(PUBLIC_DIR) !== 0) { res.writeHead(403); return res.end('forbidden'); }
     fs.readFile(fp, (err, buf) => {
       if (err) { res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }); return res.end('not found'); }
-      res.writeHead(200, { 'Content-Type': MIME[path.extname(fp).toLowerCase()] || 'application/octet-stream', 'Content-Length': buf.length });
+      const hdr = { 'Content-Type': MIME[path.extname(fp).toLowerCase()] || 'application/octet-stream', 'Content-Length': buf.length };
+      if (fp.indexOf(ICON_DIR) === 0) hdr['Cache-Control'] = 'public, max-age=604800, immutable';
+      res.writeHead(200, hdr);
       res.end(buf);
     });
   } catch (e) {
@@ -513,6 +642,9 @@ server.listen(PORT, HOST, () => {
   console.log('crypto-market-dashboard -> http://' + HOST + ':' + PORT);
   // 预热全市场扫描，让首屏不用等
   getScan()
-    .then((d) => console.log('[scan] 预热完成 ' + d.scanned + '/' + d.universe + ' 个交易对'))
+    .then((d) => {
+      console.log('[scan] 预热完成 ' + d.scanned + '/' + d.universe + ' 个交易对');
+      warmIcons().catch((e) => console.log('[icon] 预热失败 ' + e.message));
+    })
     .catch((e) => console.log('[scan] 预热失败 ' + e.message));
 });

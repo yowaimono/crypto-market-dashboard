@@ -221,6 +221,25 @@ table.tbl .rk { color: var(--muted-foreground); font-size: .74rem; }
 .vault-desc { margin-top: 14px; font-size: .78rem; color: var(--muted-foreground); line-height: 1.65; }
 .vault-addr { margin-top: 6px; font-size: .72rem; color: var(--muted-foreground); word-break: break-all; }
 
+/* ===== 币种图标 ===== */
+.ci {
+  position: relative; display: inline-block; flex: 0 0 auto;
+  width: 18px; height: 18px; border-radius: 50%; overflow: hidden;
+  background: var(--hover);
+  vertical-align: -4px; margin-right: 6px; user-select: none;
+}
+.ci svg, .ci img { display: block; width: 100%; height: 100%; }
+.ci img { position: absolute; inset: 0; object-fit: cover; }
+.ci-sm { width: 15px; height: 15px; line-height: 15px; font-size: .48rem; margin-right: 5px; vertical-align: -3px; }
+.ci-lg { width: 26px; height: 26px; line-height: 26px; font-size: .74rem; margin-right: 0; vertical-align: middle; }
+/* 币种单元格：图标 + 名称不换行 */
+.coin, .sym, .cc, .hl-u, .modal-title, .kline-name { white-space: nowrap; }
+.cc { display: inline-flex; align-items: center; }
+#volBars .vrow { grid-template-columns: 20px 62px minmax(48px, 1fr) 60px 72px; }
+.rrow { grid-template-columns: 74px 1fr 54px 54px; }
+.hl-u { text-align: center; }
+.hl-u .ci { margin-right: 0; }
+
 /* ===== 全市场异动扫描 ===== */
 .search { min-width: 148px; }
 table.scan tbody tr { cursor: pointer; }
