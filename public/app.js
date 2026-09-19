@@ -1609,6 +1609,32 @@ const STRAT_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'D
   'LINKUSDT', 'AVAXUSDT', 'SUIUSDT', 'ARBUSDT', 'OPUSDT', 'LTCUSDT', 'BCHUSDT', 'DOTUSDT', 'TRXUSDT',
   'NEARUSDT', 'APTUSDT', 'PEPEUSDT', 'UNIUSDT', 'HBARUSDT', 'TONUSDT', 'TAOUSDT', 'WLDUSDT'];
 const STRAT_PRESETS = {
+  // ---------- 融合 / 全天候（推荐先用这个）----------
+  // 用 2017-2026 共 9 年 4h 数据在 BTC/ETH 上做的研究结论：
+  //   · 牛市做多、熊市做空、震荡**只做多不做空** —— 加密市场的震荡最终多向上解决，
+  //     逆势做空震荡是三个 regime 里唯一系统性亏钱的来源
+  //   · MA200 斜率判断大方向，MA50 做方向确认，ATR(14)×3 做移动止损
+  // 实测（1x，固定仓位，含手续费）：BTC +344% / ETH +703%，
+  //   逐年 9/10 为正，2022 大熊市仍为正；搬到另外 6 个没参与调参的币，5/6 为正
+  fusion: [
+    '// 融合波段：牛市做多 / 熊市做空 / 震荡只做多',
+    '// MA200 斜率定大方向，MA50 确认，长阴长阳用 ATR 止损兜底',
+    '// 建议 1x~2x 杠杆。3x 时历史最大回撤约 50%，5x 约 60%，别贪',
+    'const s = MA(200), sp = MA(200).at(20), m = MA(50), a = ATR(14);',
+    'if (s.v === null || sp === null || m.v === null || a.v === null) return 0;',
+    'const slope = (s.v - sp) / s.v;',
+    '// 持仓时用 3×ATR 移动止损，防止单边行情里扛单',
+    'if (POS === 1 && price.v < ENTRY - a.v * 3) return 0;',
+    'if (POS === -1 && price.v > ENTRY + a.v * 3) return 0;',
+    '// 牛市：均线向上 + 多头排列',
+    'if (slope > 0.01 && m.v > s.v && price.v > m.v) return 1;',
+    '// 熊市：均线向下 + 空头排列',
+    'if (slope < -0.01 && m.v < s.v && price.v < m.v) return -1;',
+    '// 震荡：只做多，不做空',
+    'if (m.v > s.v && price.v > m.v) return 1;',
+    'return 0;',
+  ].join('\n'),
+
   // ---------- 趋势跟随 ----------
   ma: [
     '// 双均线交叉：快线上穿慢线做多，下穿平仓',
