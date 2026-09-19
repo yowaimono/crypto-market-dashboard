@@ -2164,9 +2164,42 @@ function renderPaperEvents(ev) {
     + (e.reason ? ' <span class="sub">' + escHtml(e.reason) + '</span>' : '') + '</div>').join('') + '</div>';
 }
 
+// 把回测区的策略下拉选项，原样克隆到实盘模拟区（避免两处维护同一份列表）
+function buildPaperPresets() {
+  const src = document.getElementById('stratPreset');
+  const dst = document.getElementById('paperPreset');
+  if (!src || !dst || dst.options.length) return;
+  dst.innerHTML = src.innerHTML;
+  dst.value = src.value || 'fusion';
+  const t = document.getElementById('paperCode');
+  if (t && !t.value) t.value = STRAT_PRESETS[dst.value] || '';
+}
+
+// 实盘策略选择：换一项就载入对应代码
+document.getElementById('paperPreset').addEventListener('change', (e) => {
+  const key = e.target.value;
+  const code = STRAT_PRESETS[key];
+  if (code === undefined) return;
+  document.getElementById('paperCode').value = code;
+  // 做空策略自动勾上「允许做空」，否则信号会被压成 0，跑起来一笔交易都没有
+  const box = document.getElementById('paperShort');
+  if (key.indexOf('short') === 0) box.checked = true;
+  else if (!/return\s+-1/.test(code)) box.checked = false;
+  const hint = document.getElementById('paperPresetHint');
+  if (hint) hint.textContent = key.indexOf('short') === 0
+    ? '这是做空策略，已自动勾选「允许做空」'
+    : '已载入，可直接在文本框里改';
+});
+
+// 从上方回测编辑框复制代码
+document.getElementById('paperFromBacktest').addEventListener('click', () => {
+  document.getElementById('paperCode').value = document.getElementById('stratCode').value;
+  document.getElementById('paperPresetHint').textContent = '已从上方回测代码复制（自定义代码）';
+});
+
 async function paperCreate() {
-  const code = document.getElementById('stratCode').value;
-  if (!code.trim()) { document.getElementById('paperMsg').textContent = '请先在上方填写策略代码'; return; }
+  const code = document.getElementById('paperCode').value;
+  if (!code.trim()) { document.getElementById('paperMsg').textContent = '请先选择策略或填写策略代码'; return; }
   const body = {
     name: document.getElementById('paperName').value || '我的策略',
     symbol: document.getElementById('paperSymbol').value || 'BTCUSDT',
@@ -2233,6 +2266,11 @@ function initPaper() {
 function onStrategyView() {
   if (!stratState.inited) {
     stratState.inited = true;
+    // 回测区的策略下拉是写在 HTML 里的 <optgroup>，这里兜底确认它有内容
+    const src = document.getElementById('stratPreset');
+    if (src && !src.options.length) src.innerHTML = Object.keys(STRAT_PRESETS).map((k) => '<option value="' + k + '">' + k + '</option>').join('');
+    // 注意：实盘区的初始化必须放在回测区控件建好之后，
+    // 因为它要克隆 stratPreset 的选项；放早了会克隆到空列表。
     initPaper();
     const symSel = document.getElementById('stratSymbol');
     symSel.innerHTML = STRAT_SYMBOLS.map((s) => '<option value="' + s + '">' + s.replace(/USDT$/, '') + ' / USDT</option>').join('');
@@ -2276,6 +2314,8 @@ function onStrategyView() {
       }
       stratMsg(isShort ? '做空策略已载入，已自动勾选「允许做空」并将杠杆上限降到 3x（可自行调高）' : '');
     });
+    // 回测控件都建好了，此时再克隆策略列表到实盘模拟区
+    buildPaperPresets();
     document.getElementById('stratRun').addEventListener('click', runStrategy);
     document.getElementById('stratIndBar').addEventListener('click', (e) => {
       const b = e.target.closest('button[data-sind]');

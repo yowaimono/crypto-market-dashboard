@@ -334,6 +334,21 @@
       </div>
 
       <div class="card">
+        <div class="paper-ctrl paper-pick">
+          <label class="pf pf-wide"><span class="sub">选择策略</span>
+            <select id="paperPreset" class="select" aria-label="选择策略"></select>
+          </label>
+          <span class="sub" id="paperPresetHint">选中后下面文本框会载入该策略代码，可直接改</span>
+        </div>
+        <textarea id="paperCode" class="strat-code" spellcheck="false" rows="9" style="margin-top:12px"></textarea>
+        <div class="paper-ctrl" style="margin-top:12px">
+          <span class="sub">可用：<code>MA</code> <code>VMA</code> <code>EMA</code> <code>RSI</code> <code>ATR</code> <code>MACD</code> <code>BOLL</code> <code>crossover</code> <code>highest</code> <code>lowest</code> ｜ 返回 <b>1</b> 多 / <b>-1</b> 空 / <b>0</b> 空仓</span>
+          <span class="spacer"></span>
+          <button class="btn btn-mini" id="paperFromBacktest">从上方回测代码复制</button>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:12px">
         <div class="paper-ctrl">
           <label class="pf"><span class="sub">名称</span><input id="paperName" class="select" type="text" value="我的策略" maxlength="20"></label>
           <label class="pf"><span class="sub">币种</span><select id="paperSymbol" class="select"></select></label>
@@ -351,7 +366,7 @@
           <button class="btn btn-primary" id="paperStart">开始模拟</button>
           <button class="btn" id="paperRefresh">刷新</button>
         </div>
-        <div class="sub" id="paperMsg" style="margin-top:10px">策略代码取自上方编辑框（改代码后重新点「开始模拟」会按新代码新建一个实例）</div>
+        <div class="sub" id="paperMsg" style="margin-top:10px">点「开始模拟」后它会按上面选定的策略与参数持续监听行情</div>
       </div>
 
       <div id="paperList"></div>

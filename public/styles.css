@@ -226,6 +226,8 @@ table.tbl .rk { color: var(--muted-foreground); font-size: .74rem; }
 .paper-ctrl .pf { display: flex; align-items: center; gap: 7px; }
 .paper-ctrl .pf .select { width: 88px; }
 .paper-ctrl .pf input[type="text"] { width: 120px; }
+.paper-ctrl .pf-wide { flex: 1 1 280px; }
+.paper-ctrl .pf-wide .select { width: auto; min-width: 220px; flex: 1; }
 .paper-tbl td { white-space: nowrap; }
 .paper-tbl .coin { font-weight: 600; }
 .paper-tbl .coin:hover { color: var(--primary); }
