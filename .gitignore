@@ -16,6 +16,7 @@ public/icons/
 # 快讯缓存（接口挂掉时回退用，运行时生成）
 .news-cache.json
 .odaily-cache.json
+.jinse-cache.json
 
 # 系统文件
 Thumbs.db

@@ -264,6 +264,10 @@ table.tbl .rk { color: var(--muted-foreground); font-size: .74rem; }
 }
 .nsrc.s528 { background: color-mix(in srgb, var(--viz-series-1) 18%, transparent); color: var(--viz-series-1); }
 .nsrc.sod { background: color-mix(in srgb, var(--viz-series-3) 22%, transparent); color: var(--viz-series-3); }
+.nsrc.sjs { background: color-mix(in srgb, var(--viz-series-2) 22%, transparent); color: var(--viz-series-2); }
+.nlink { margin-top: 4px; }
+.nlink a { font-size: .72rem; color: var(--primary); text-decoration: none; }
+.nlink a:hover { text-decoration: underline; }
 .ntags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
 .ntag {
   font-size: .68rem; font-weight: 700; padding: 1.5px 7px; border-radius: 999px;

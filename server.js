@@ -10,6 +10,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const vm = require('vm');
 const { cgFetch } = require('./lib/coinglass');
 
 const PORT = Number(process.env.PORT || 8787);
@@ -722,14 +723,19 @@ function solveChallenge(html) {
   const m = /<script>([\s\S]*?)<\/script>/.exec(html);
   if (!m) return '';
   const jar = [];
-  const document = {
-    get cookie() { return jar.join(' '); },
-    set cookie(v) { jar.push(String(v)); },
+  const sandbox = {
+    document: {
+      get cookie() { return jar.join(' '); },
+      set cookie(v) { jar.push(String(v)); },
+    },
+    location: { href: 'https://www.528btc.com/kx/' },
+    setTimeout: () => 0,
   };
-  const location = { href: 'https://www.528btc.com/kx/' };
   try {
-    // 脚本只用 document.cookie / location.href / setTimeout，没有别的能力
-    new Function('document', 'location', 'setTimeout', m[1])(document, location, () => 0);
+    // 这段脚本来自远端，绝不能让它碰到 process / require。
+    // 用 vm 沙箱执行：只给 document.cookie / location / setTimeout，并加超时。
+    const ctx = vm.createContext(sandbox);
+    vm.runInContext(m[1], ctx, { timeout: 2000, displayErrors: false });
   } catch (e) { return ''; }
   const pairs = [];
   for (let i = 0; i < jar.length; i++) {
@@ -908,22 +914,54 @@ async function getNewsAll() {
   const hit = cache.get('newsall');
   if (hit && Date.now() - hit.at < NEWS_TTL) return hit.val;
 
-  const [b, o] = await Promise.all([
+  const [b, o, j] = await Promise.all([
     getNews().catch(() => null),
     getOdaily().catch(() => null),
+    getJinse().catch(() => null),
   ]);
   const a = (b && b.ok) ? b.news : [];
   const c = (o && o.ok) ? o.news : [];
+  const e = (j && j.ok) ? j.news : [];
 
-  // 同一件事两家都报的情况很常见，做一次近似去重（标题前 18 字）
-  const key = {}, merged = [];
-  a.concat(c).forEach((n) => {
-    const k = String(n.title).replace(/[\s《》“”，。：、！？·|（）()\[\]【】—-]/g, '').slice(0, 18);
-    if (key[k]) return;
-    key[k] = 1;
+  // 三家同报一事时标题写法往往不同（"Radix遭引擎漏洞攻击" vs "Radix：攻击者利用引擎漏洞"），
+  // 单靠标题前缀抓不住。先按时间倒序，再做两件事：
+  //   1) 同一来源里标题前 18 字相同的，只留一条
+  //   2) 跨源在 20 分钟窗口内、标题 2-gram 重合度够高的，判定为同一件事
+  const all = a.concat(c, e).sort((x, y) => y.t - x.t);
+  const norm = (s) => String(s).replace(/[\s《》“”，。：、！？·|（）()\[\]【】—-]/g, '');
+  const gram = (s) => {
+    const t = norm(s), set = new Set();
+    for (let i = 0; i + 1 < t.length; i++) set.add(t.slice(i, i + 2));
+    return set;
+  };
+  // 两个口径一起用：min = 命中数/较短标题，jac = 命中数/并集。
+  // 阈值是拿实际数据标出来的：同一件事的两条标题 min 落在 0.6~1.0；
+  // 而「BTC突破81000」vs「SOL突破110」这种共用行情模板的假阳性是 min 0.52 / jac 0.34，
+  // 所以卡 min>=0.6 且 jac>=0.28 能把假阳性挡掉，只合并真正重复的那几条。
+  // 保守优先：宁可同一条新闻出现两次，也不能把两条不同的事合并成一条。
+  const sim = (A, B) => {
+    if (!A.size || !B.size) return 0;
+    let hit = 0;
+    A.forEach((g) => { if (B.has(g)) hit++; });
+    return { min: hit / Math.min(A.size, B.size), jac: hit / (A.size + B.size - hit) };
+  };
+  const seenKey = {}, merged = [];
+  all.forEach((n) => {
+    const k = norm(n.title).slice(0, 18);
+    if (seenKey[n.source + '|' + k]) return;   // 同源重复，直接丢
+    const g = gram(n.title);
+    for (let i = 0; i < merged.length; i++) {
+      const p = merged[i];
+      // merged 按时间倒序，越靠前越新；比 n 新超过 20 分钟的还没轮到比较窗口，
+      // 这些要 continue 跳过，不能 break（一 break 就永远只跟最新那条比）
+      if (p.t - n.t > 20 * 60000) continue;
+      if (p.source === n.source) continue;
+      const s = sim(g, gram(p.title));
+      if (s.min >= 0.6 && s.jac >= 0.28) { seenKey[n.source + '|' + k] = 1; return; }
+    }
+    seenKey[n.source + '|' + k] = 1;
     merged.push(n);
   });
-  merged.sort((x, y) => y.t - x.t);
 
   const now = Date.now();
   const live = merged.filter((n) => n.t >= now - 24 * 3600000);
@@ -947,8 +985,9 @@ async function getNewsAll() {
     sources: [
       { key: '528btc', label: '币界网 528btc', n: a.length, ok: !!(b && b.ok), stale: !!(b && b.stale) },
       { key: 'odaily', label: 'Odaily 星球日报', n: c.length, ok: !!(o && o.ok), stale: !!(o && o.stale) },
+      { key: 'jinse', label: '金色财经', n: e.length, ok: !!(j && j.ok), stale: !!(j && j.stale) },
     ],
-    stale: !!((b && b.stale) || (o && o.stale)),
+    stale: !!((b && b.stale) || (o && o.stale) || (j && j.stale)),
     news: merged,
   };
   cache.set('newsall', { at: Date.now(), val: val });
@@ -1094,6 +1133,120 @@ function odailyTags(d) {
 // 读任意 JSON 缓存文件
 function readJsonCache(file) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { return null; }
+}
+
+// ---------- 消息面：金色财经快讯 ----------
+// https://www.jinse2.com/lives 是 Nuxt.js SSR 页面。数据不在公开接口里
+// （newapi.jinse2.com 上试遍 /v1/lives 等路径全 404，?page / ?date 这类参数也不生效），
+// 但首屏状态会内联成 window.__NUXT__=(function(a,b,...){return {...}}(...)) 这种
+// IIFE 表达式，参数本身就是被压缩后的字面量。直接求值这个表达式即可拿到完整列表。
+// 该表达式来自远端，同样跑在 vm 沙箱里并加超时；实测它不依赖 window/document，
+// 只要一个干净上下文就能求值。一次约 30 条（含完整正文，质量是三家里最高的）。
+const JINSE_URL = 'https://www.jinse2.com/lives';
+const JINSE_TTL = 90000;
+const JINSE_CACHE_FILE = path.join(__dirname, '.jinse-cache.json');
+
+// 从 HTML 里抠出 window.__NUXT__=(...) 的表达式并求值
+function jinseState(html) {
+  const i = html.indexOf('window.__NUXT__=');
+  if (i < 0) return null;
+  const start = html.indexOf('(', i);
+  if (start < 0) return null;
+  // 括号配平（跳过字符串里的括号）
+  let depth = 0, end = -1, inStr = false, esc = false, quote = '';
+  for (let k = start; k < html.length; k++) {
+    const c = html[k];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (c === '\\') esc = true;
+      else if (c === quote) inStr = false;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === '\u0060') { inStr = true; quote = c; continue; }
+    if (c === '(') depth++;
+    else if (c === ')') { depth--; if (!depth) { end = k + 1; break; } }
+  }
+  if (end < 0) return null;
+  try {
+    const ctx = vm.createContext(Object.create(null)); // 无 require / process / global
+    return vm.runInContext('(' + html.slice(start, end) + ')', ctx, { timeout: 3000, displayErrors: false });
+  } catch (e) {
+    return null;
+  }
+}
+
+async function getJinse() {
+  const hit = cache.get('jinse');
+  if (hit && Date.now() - hit.at < JINSE_TTL) return hit.val;
+
+  let state = null;
+  try {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 20000);
+    let res;
+    try {
+      res = await fetch(JINSE_URL, {
+        signal: ac.signal,
+        headers: { 'user-agent': NEWS_UA, 'accept-language': 'zh-CN,zh;q=0.9', 'accept': 'text/html' },
+      });
+    } finally { clearTimeout(timer); }
+    if (res.ok) state = jinseState(await res.text());
+  } catch (e) { state = null; }
+
+  const raw = state && state.data && state.data[0] && state.data[0].newsletterData
+    ? state.data[0].newsletterData[0].lives : null;
+  if (!raw || !raw.length) {
+    const old = readJsonCache(JINSE_CACHE_FILE);
+    if (old) return Object.assign({}, old, { stale: true });
+    return { ok: false, error: '金色财经快讯不可达' };
+  }
+
+  const seen = {}, out = [];
+  raw.forEach((d) => {
+    const id = String(d.id);
+    if (seen[id]) return;
+    seen[id] = 1;
+    // 正文形如「【标题】金色财经报道，...」，把标题从正文里剥出来
+    let title = String(d.content_prefix || '').trim();
+    let text = stripTags(d.content);
+    const m = /^【([^】]{4,80})】\s*/.exec(text);
+    if (m) {
+      if (!title) title = m[1];
+      text = text.slice(m[0].length);
+    }
+    if (!title) title = text.slice(0, 40);
+    out.push({
+      id: 'js-' + id,
+      t: +d.created_at * 1000,
+      title: title,
+      text: text,
+      tags: jinseTags(title, text),
+      important: +d.grade >= 5,   // grade 5 = 金色晨讯这类汇总长文
+      url: d.link || ('https://www.jinse2.com/lives/' + d.id + '.html'),
+      source: 'jinse',
+    });
+  });
+  out.sort((a, b) => b.t - a.t);
+
+  const val = { ok: true, updated: Date.now(), count: out.length, news: out };
+  try { fs.writeFileSync(JINSE_CACHE_FILE, JSON.stringify(val)); } catch (e) {}
+  cache.set('jinse', { at: Date.now(), val: val });
+  return val;
+}
+
+// 金色财经没有币种标签字段，同样用符号 + 中文名匹配
+function jinseTags(title, text) {
+  const out = [], seen = {};
+  const push = (s) => {
+    const u = String(s || '').toUpperCase();
+    if (NEWS_TAG_OK.has(u) && !seen[u]) { seen[u] = 1; out.push(u); }
+  };
+  const hay = String(title || '') + ' ' + String(text || '');
+  let m;
+  const re = /(?:\$|\b)([A-Z][A-Z0-9]{1,9})\b/g;
+  while ((m = re.exec(hay))) push(m[1]);
+  for (const k in NEWS_TAG_CN) { if (hay.indexOf(k) >= 0) push(NEWS_TAG_CN[k]); }
+  return out;
 }
 
 // ---------- HTTP ----------

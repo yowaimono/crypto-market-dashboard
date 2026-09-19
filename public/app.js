@@ -1177,7 +1177,11 @@ document.getElementById('stkTable').addEventListener('click', (e) => {
 const NEWS_WINS = [{ k: '1h', label: '近 1 小时' }, { k: '4h', label: '近 4 小时' }, { k: '24h', label: '近 24 小时' }];
 const NEWS_WIN_MS = { '1h': 3600000, '4h': 4 * 3600000, '24h': 24 * 3600000 };
 let newsWin = '4h', newsQuery = '', newsCoin = '', newsSrc = '', newsData = null;
-const NEWS_SRC = { '528btc': { label: '币界网', cls: 's528' }, 'odaily': { label: 'Odaily', cls: 'sod' } };
+const NEWS_SRC = {
+  '528btc': { label: '币界网', cls: 's528' },
+  'odaily': { label: 'Odaily', cls: 'sod' },
+  'jinse': { label: '金色', cls: 'sjs' },
+};
 // 只有币安真的在交易的币才做成可点标签，否则点了弹窗也是空的
 let tradingBases = null;
 
@@ -1270,6 +1274,7 @@ function renderNews(d) {
       + '<div class="nbody"><div class="ntitle">' + (n.important ? '<span class="nstar">★</span>' : '')
       + '<span class="nsrc ' + sm.cls + '">' + sm.label + '</span>' + escHtml(n.title) + '</div>'
       + (n.text ? '<div class="ntext">' + escHtml(n.text) + '</div>' : '')
+      + (n.url ? '<div class="nlink"><a href="' + escAttr(n.url) + '" target="_blank" rel="noopener noreferrer">原文 ↗</a></div>' : '')
       + tags + '</div></div>';
   });
   document.getElementById('newsList').innerHTML = html || '<div class="sub" style="padding:18px">这个范围内没有快讯</div>';
