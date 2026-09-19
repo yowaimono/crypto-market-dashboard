@@ -1609,6 +1609,47 @@ const STRAT_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'D
   'LINKUSDT', 'AVAXUSDT', 'SUIUSDT', 'ARBUSDT', 'OPUSDT', 'LTCUSDT', 'BCHUSDT', 'DOTUSDT', 'TRXUSDT',
   'NEARUSDT', 'APTUSDT', 'PEPEUSDT', 'UNIUSDT', 'HBARUSDT', 'TONUSDT', 'TAOUSDT', 'WLDUSDT'];
 const STRAT_PRESETS = {
+  // ---------- 剥头皮（研究用：真实费率下必然亏损）----------
+  // 详见仓库根目录 SCALPING.md。结论：1m 每笔毛收益 0.0016~0.0092%，
+  // 而往返成本 0.08~0.24%，成本是收益的 9~150 倍。
+  // 这几个策略保留下来是为了让你能在「实盘模拟」里亲手验证：
+  //   把手续费设成 0 看毛收益，再调回 0.05% 看净收益，差额就是全部结论。
+  scalpRsi2: [
+    '// 【研究用·真实费率下必亏】RSI(2) 极端反转：1m 上最经典的高频剥头皮',
+    '// 毛收益确实为正（胜率约 59%），但每笔只有 0.0016%，远低于成本',
+    'const r = RSI(2);',
+    'if (r.v === null) return 0;',
+    'if (r.v < 10) return 1;',
+    'if (r.v > 90) return -1;',
+    'if (POS > 0 && r.v > 60) return 0;',
+    'if (POS < 0 && r.v < 40) return 0;',
+    'return POS;',
+  ].join('\n'),
+  scalpMa: [
+    '// 【研究用·真实费率下必亏】均值回归 MA5：本报告里毛收益最高的一档',
+    '// 每笔毛收益 0.0092%（全组最高），但仍是往返成本的 1/15',
+    'const m = MA(5);',
+    'if (m.v === null) return 0;',
+    'const d = (price.v - m.v) / m.v * 100;',
+    'if (d < -0.15) return 1;',
+    'if (d > 0.15) return -1;',
+    'if (Math.abs(d) < 0.03) return 0;',
+    'return POS;',
+  ].join('\n'),
+  scalpBollZ: [
+    '// 【研究用·真实费率下必亏】布林 z 反转：信号少、每笔毛收益较高',
+    '// 注意样本量小（90 天仅数十笔），统计上不可靠',
+    'const b = BOLL(20, 2);',
+    'if (b.mid.v === null) return 0;',
+    'const w = b.up.v - b.mid.v;',
+    'if (w <= 0) return 0;',
+    'const z = (price.v - b.mid.v) / w;',
+    'if (z < -2) return 1;',
+    'if (z > 2) return -1;',
+    'if (Math.abs(z) < 0.3) return 0;',
+    'return POS;',
+  ].join('\n'),
+
   // ---------- 融合 / 全天候（推荐先用这个）----------
   // 用 2017-2026 共 9 年 4h 数据在 BTC/ETH 上做的研究结论：
   //   · 牛市做多、熊市做空、震荡**只做多不做空** —— 加密市场的震荡最终多向上解决，
