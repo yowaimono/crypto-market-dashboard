@@ -42,6 +42,7 @@
     <button type="button" class="mtab" data-view="hyperliquid">Hyperliquid</button>
     <button type="button" class="mtab" data-view="strategy">策略模拟盘</button>
     <button type="button" class="mtab" data-view="stocks">币股行情</button>
+    <button type="button" class="mtab" data-view="news">消息面</button>
   </nav>
 
   <div id="view-market">
@@ -392,6 +393,48 @@
       </div>
     </section>
   </div><!-- /view-stocks -->
+
+  <div id="view-news" hidden>
+
+    <section class="block">
+      <div class="block-head">
+        <div>
+          <h2>消息面</h2>
+          <div class="sub" id="newsSub">加载中…</div>
+        </div>
+        <span class="badge" id="newsBadge">—</span>
+      </div>
+      <div class="stats">
+        <div class="stat"><div class="sub">快讯条数</div><div class="stat-value" id="newsCount">—</div><div class="sub" id="newsCountSub">—</div></div>
+        <div class="stat"><div class="sub">最新一条</div><div class="stat-value" id="newsLatest">—</div><div class="sub" id="newsLatestSub">—</div></div>
+        <div class="stat"><div class="sub">近 1 小时</div><div class="stat-value" id="newsP1">—</div><div class="sub">条快讯</div></div>
+        <div class="stat"><div class="sub">近 4 小时</div><div class="stat-value" id="newsP4">—</div><div class="sub">条快讯</div></div>
+        <div class="stat"><div class="sub">近 24 小时</div><div class="stat-value" id="newsP24">—</div><div class="sub">条快讯</div></div>
+        <div class="stat"><div class="sub">全场最热</div><div class="stat-value" id="newsHot">—</div><div class="sub" id="newsHotSub">—</div></div>
+      </div>
+    </section>
+
+    <section class="block">
+      <div class="block-head">
+        <div><h2>提及热度</h2><div class="sub">近 24 小时被提及次数 · 点币种筛选消息</div></div>
+      </div>
+      <div class="card"><div class="hotbar" id="newsHotbar"></div></div>
+    </section>
+
+    <section class="block">
+      <div class="block-head">
+        <div><h2>快讯时间线</h2><div class="sub" id="newsListSub">—</div></div>
+        <div class="controls">
+          <div class="seg" id="newsWin" role="group" aria-label="时间范围"></div>
+          <input id="newsSearch" class="select search" type="search" placeholder="搜索快讯，如 比特币 / ETF" autocomplete="off" spellcheck="false">
+        </div>
+      </div>
+      <div class="card">
+        <div class="scroll news-scroll"><div id="newsList"></div></div>
+        <div class="sub" id="newsFoot" style="margin-top:10px"></div>
+      </div>
+    </section>
+  </div><!-- /view-news -->
 
   <footer class="foot">
     本地后端代理 · 零外部 CDN 依赖 · 仅供看盘参考，非投资建议

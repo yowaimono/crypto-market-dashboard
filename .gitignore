@@ -13,6 +13,9 @@ node_modules/
 # 币种图标缓存（运行时自动生成，几百个小 PNG，不入库）
 public/icons/
 
+# 快讯缓存（接口挂掉时回退用，运行时生成）
+.news-cache.json
+
 # 系统文件
 Thumbs.db
 desktop.ini

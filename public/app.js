@@ -1170,9 +1170,157 @@ document.getElementById('stkTable').addEventListener('click', (e) => {
   if (tr) openKlineModal(tr.getAttribute('data-sym'));
 });
 
+// ============================================================
+// 消息面（币界网 528btc 快讯）
+// 后端已经把停更的精选流过滤掉了，这里只做展示与筛选。
+// ============================================================
+const NEWS_WINS = [{ k: '1h', label: '近 1 小时' }, { k: '4h', label: '近 4 小时' }, { k: '24h', label: '近 24 小时' }];
+const NEWS_WIN_MS = { '1h': 3600000, '4h': 4 * 3600000, '24h': 24 * 3600000 };
+let newsWin = '4h', newsQuery = '', newsCoin = '', newsData = null;
+// 只有币安真的在交易的币才做成可点标签，否则点了弹窗也是空的
+let tradingBases = null;
+
+// 只有币安真的在交易的币才算「可点」，其余标签只做展示（点了也没 K 线看）
+function newsTag(s) {
+  return tradingBases && tradingBases[s] ? ' data-ntag="' + s + '"' : '';
+}
+
+function newsShown() {
+  if (!newsData) return [];
+  const q = newsQuery.trim().toUpperCase();
+  const cut = Date.now() - NEWS_WIN_MS[newsWin];
+  return newsData.news.filter((n) => {
+    if (newsCoin && n.tags.indexOf(newsCoin) < 0) return false;
+    // 选了币种就不受时间窗限制，否则容易筛出空列表
+    if (!newsCoin && n.t < cut) return false;
+    if (q && (n.title + ' ' + n.text + ' ' + n.tags.join(' ')).toUpperCase().indexOf(q) < 0) return false;
+    return true;
+  });
+}
+
+function relTime(t) {
+  const s = Math.max(0, Math.floor((Date.now() - t) / 1000));
+  if (s < 60) return s + ' 秒前';
+  if (s < 3600) return Math.floor(s / 60) + ' 分钟前';
+  if (s < 86400) return Math.floor(s / 3600) + ' 小时前';
+  return Math.floor(s / 86400) + ' 天前';
+}
+
+function renderNews(d) {
+  const list = newsShown();
+  const set = (id, v, sub) => {
+    document.getElementById(id).textContent = v;
+    if (sub !== undefined) document.getElementById(id + 'Sub').innerHTML = sub;
+  };
+  set('newsCount', d.count + ' 条', '已过滤停更的精选 ' + d.dropped + ' 条');
+  set('newsLatest', relTime(d.latest), new Date(d.latest).toLocaleTimeString('zh-CN', { hour12: false }));
+  set('newsP1', d.pace['1h']);
+  set('newsP4', d.pace['4h']);
+  set('newsP24', d.pace['24h']);
+  const top = (d.hot || [])[0];
+  if (top) set('newsHot', top.s, '近 24h 被提及 ' + top.n + ' 次');
+  document.getElementById('newsBadge').textContent = d.count + ' 条 · ' + (d.stale ? '缓存' : '实时');
+  document.getElementById('newsSub').innerHTML = d.source + ' · 数据源 528btc.com · 快照 '
+    + new Date(d.updated).toLocaleTimeString('zh-CN', { hour12: false })
+    + (d.stale ? ' <span class="down">（接口不可达，显示上次缓存）</span>' : '');
+
+  // 热度条
+  const hot = (d.hot || []).slice(0, 20);
+  const max = hot.length ? hot[0].n : 1;
+  document.getElementById('newsHotbar').innerHTML = hot.length ? hot.map((h) => {
+    const w = Math.max(6, (h.n / max) * 100);
+    const on = newsCoin === h.s;
+    return '<div class="hrow' + (on ? ' on' : '') + '" data-coin="' + h.s + '">'
+      + '<span class="hk">' + h.s + '</span>'
+      + '<span class="track"><span class="bar" style="width:' + w.toFixed(1) + '%"></span></span>'
+      + '<span class="hv">' + h.n + '</span></div>';
+  }).join('') : '<div class="sub">暂无数据</div>';
+
+  document.getElementById('newsWin').innerHTML = NEWS_WINS.map((w) =>
+    '<button type="button" data-w="' + w.k + '"' + (w.k === newsWin ? ' class="on"' : '') + '>' + w.label + '</button>').join('');
+
+  // 时间线
+  let html = '';
+  let lastDay = '';
+  list.forEach((n) => {
+    const dt = new Date(n.t);
+    const day = dt.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' });
+    if (day !== lastDay) {
+      lastDay = day;
+      html += '<div class="nday">' + dt.toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' }) + '</div>';
+    }
+    const tags = n.tags.length
+      ? '<div class="ntags">' + n.tags.map((s) => '<span class="ntag"' + newsTag(s) + '>' + s + '</span>').join('') + '</div>'
+      : '';
+    html += '<div class="nitem' + (n.important ? ' imp' : '') + '" data-id="' + n.id + '">'
+      + '<div class="ntime"><b>' + pad2(dt.getHours()) + ':' + pad2(dt.getMinutes()) + '</b><span class="sub">' + relTime(n.t) + '</span></div>'
+      + '<div class="nbody"><div class="ntitle">' + (n.important ? '<span class="nstar">★</span>' : '') + escHtml(n.title) + '</div>'
+      + (n.text ? '<div class="ntext">' + escHtml(n.text) + '</div>' : '')
+      + tags + '</div></div>';
+  });
+  document.getElementById('newsList').innerHTML = html || '<div class="sub" style="padding:18px">这个范围内没有快讯</div>';
+  // 锁定币种时会跳过时间窗（否则一筛就空），所以这种情况下别再显示"近 4 小时"
+  document.getElementById('newsListSub').textContent = (newsCoin ? '筛选 ' + newsCoin + ' · 全部时间' : NEWS_WINS.filter((w) => w.k === newsWin)[0].label)
+    + ' · 共 ' + list.length + ' 条';
+  document.getElementById('newsFoot').textContent = list.length
+    ? '显示 ' + list.length + ' 条（共 ' + d.count + ' 条，最新 ' + relTime(d.latest) + '）'
+      + (newsCoin ? ' · 已锁定 ' + newsCoin : '') + (newsQuery ? ' · 搜索：' + newsQuery : '')
+    : '没有匹配的快讯';
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function filterNewsCoin(sym) {
+  newsCoin = (newsCoin === sym) ? '' : sym;
+  if (newsData) renderNews(newsData);
+}
+
+async function loadNews() {
+  try {
+    const d = await fetchJSON('/api/news');
+    if (!d.ok) throw new Error(d.error || 'no data');
+    if (!tradingBases) {
+      try {
+        const h = await fetchJSON('/api/health');
+        tradingBases = {};
+        (h.symbols || []).forEach((s) => { tradingBases[s.replace(/USDT$/, '')] = 1; });
+        (h.dynamic || []).forEach((s) => { tradingBases[s.replace(/USDT$/, '')] = 1; });
+      } catch (e) { tradingBases = null; }
+    }
+    newsData = d;
+    renderNews(d);
+  } catch (e) {
+    document.getElementById('newsSub').textContent = '消息面不可达：' + e.message;
+    document.getElementById('newsList').innerHTML = '<div class="sub" style="padding:18px">加载失败：' + escHtml(e.message) + '</div>';
+  }
+}
+
+document.getElementById('newsSearch').addEventListener('input', (e) => {
+  newsQuery = e.target.value || '';
+  if (newsData) renderNews(newsData);
+});
+document.getElementById('newsWin').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-w]');
+  if (!b) return;
+  newsWin = b.getAttribute('data-w');
+  if (newsData) renderNews(newsData);
+});
+document.getElementById('newsHotbar').addEventListener('click', (e) => {
+  const r = e.target.closest('[data-coin]');
+  if (r) filterNewsCoin(r.getAttribute('data-coin'));
+});
+document.getElementById('newsList').addEventListener('click', (e) => {
+  const tg = e.target.closest('[data-ntag]');
+  if (tg) { filterNewsCoin(tg.getAttribute('data-ntag')); return; }
+  const it = e.target.closest('.nitem');
+  if (it) it.className = it.className.indexOf('open') >= 0 ? 'nitem' : 'nitem open';
+});
+
 function switchView(name) {
   state.view = name;
-  ['market', 'hyperliquid', 'strategy', 'stocks'].forEach((v) => {
+  ['market', 'hyperliquid', 'strategy', 'stocks', 'news'].forEach((v) => {
     const el = document.getElementById('view-' + v);
     if (el) el.hidden = (v !== name);
   });
@@ -1186,6 +1334,8 @@ function switchView(name) {
     onStrategyView();
   } else if (name === 'stocks') {
     loadStocks();
+  } else if (name === 'news') {
+    loadNews();
   } else if (state.candles.length) {
     drawKline(); // canvas 在隐藏时尺寸为 0，切回来必须重画
   }
@@ -2012,6 +2162,7 @@ function setupAuto() {
   timers.push(setInterval(loadScan, 60000));
   timers.push(setInterval(() => { if (state.view === 'hyperliquid') loadHyperliquid(); }, 20000));
   timers.push(setInterval(() => { if (state.view === 'stocks') loadStocks(); }, 30000));
+  timers.push(setInterval(() => { if (state.view === 'news') loadNews(); }, 60000));
 }
 
 async function init() {
@@ -2047,7 +2198,7 @@ async function init() {
   // 支持 ?view=hyperliquid 直接打进 Hyperliquid 标签页
   try {
     const vq = new URLSearchParams(location.search).get('view');
-    if (vq === 'hyperliquid' || vq === 'strategy' || vq === 'stocks') switchView(vq);
+    if (vq === 'hyperliquid' || vq === 'strategy' || vq === 'stocks' || vq === 'news') switchView(vq);
   } catch (e) {}
 
   loadMarket(); loadMomentum(); loadKlines(); loadScan();

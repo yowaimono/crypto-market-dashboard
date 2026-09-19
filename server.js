@@ -698,6 +698,210 @@ async function warmIcons() {
   console.log('[icon] 预热完成 ' + ok + '/' + bases.length + ' 个币种图标');
 }
 
+// ---------- 消息面（币界网 528btc 快讯）----------
+// 数据源：https://www.528btc.com/e/extend/api/index.php?m=data&c=kx （POST）
+//   表单 important=&type=101&page=N&size=20
+// 两个坑：
+//   1. 这个接口偶尔不返回 JSON，而是吐一段混淆过的 JS「挑战脚本」，要求带上
+//      __tst_status / EO_Bot_Ssid 两个 cookie 才放行。脚本是纯计算的，没有外部依赖，
+//      所以这里直接把脚本丢进沙箱跑一遍，读 document.cookie 拿到值（见 solveChallenge）。
+//   2. size 参数无效，服务端始终只给 20 条 —— 想多要只能翻页。
+const NEWS_API = 'https://www.528btc.com/e/extend/api/index.php?m=data&c=kx';
+const NEWS_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36';
+const NEWS_TTL = 60000;
+const NEWS_PAGES = 5;          // 普通快讯 5 页 = 100 条
+const NEWS_IMP_PAGES = 3;      // important=1 精选流 3 页（该源可能停更，见下）
+const NEWS_IMP_MAX_LAG = 12 * 3600000; // 精选条目比快讯流旧超过 12 小时就不要了
+let newsWatermark = 0;         // 快讯流最新一条的时间，用来判断精选流是否还活着
+let newsImportantDropped = 0;  // 因为太旧被丢掉的精选条数（前端如实展示）
+const NEWS_CACHE_FILE = path.join(__dirname, '.news-cache.json');
+let newsCookie = '';
+
+// 把挑战脚本跑一遍，取出它想写的 cookie
+function solveChallenge(html) {
+  const m = /<script>([\s\S]*?)<\/script>/.exec(html);
+  if (!m) return '';
+  const jar = [];
+  const document = {
+    get cookie() { return jar.join(' '); },
+    set cookie(v) { jar.push(String(v)); },
+  };
+  const location = { href: 'https://www.528btc.com/kx/' };
+  try {
+    // 脚本只用 document.cookie / location.href / setTimeout，没有别的能力
+    new Function('document', 'location', 'setTimeout', m[1])(document, location, () => 0);
+  } catch (e) { return ''; }
+  const pairs = [];
+  for (let i = 0; i < jar.length; i++) {
+    const parts = String(jar[i]).split(';');
+    for (let k = 0; k < parts.length; k++) {
+      const x = parts[k].trim().replace(/#$/, '');
+      if (x && x.indexOf('=') > 0) pairs.push(x);
+    }
+  }
+  return pairs.join('; ');
+}
+
+function newsHeaders(cookie) {
+  const h = {
+    'content-type': 'application/x-www-form-urlencoded; charset=UTF-8',
+    'accept': '*/*', 'accept-language': 'zh-CN,zh;q=0.9',
+    'origin': 'https://www.528btc.com', 'referer': 'https://www.528btc.com/kx/',
+    'user-agent': NEWS_UA, 'x-requested-with': 'XMLHttpRequest',
+  };
+  if (cookie) h.cookie = cookie;
+  return h;
+}
+
+// 抓一页；撞上挑战就自动解一次再重试
+async function newsFetchPage(page, extra, attempt) {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 20000);
+  try {
+    const res = await fetch(NEWS_API, {
+      method: 'POST', headers: newsHeaders(newsCookie), signal: ac.signal,
+      body: (extra || 'important=&') + 'type=101&page=' + page + '&size=20',
+    });
+    const text = await res.text();
+    if (text.charAt(0) === '<') { // 挑战脚本
+      if ((attempt || 0) >= 2) return null;
+      const ck = solveChallenge(text);
+      if (!ck) return null;
+      newsCookie = ck;
+      return newsFetchPage(page, extra, (attempt || 0) + 1);
+    }
+    const j = JSON.parse(text);
+    if (!j || j.code !== 200 || !j.data) return null;
+    return j.data;
+  } catch (e) {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// 快讯自带一个 coins 标签数组，但噪声极大 —— SEC / ETF / WHALE / LABS / APPLE
+// 这类概念词也会被当成「币」标进来（实测 SEC 出现 18 次、ETF 16 次），
+// 所以只认能真正对应上主流币的标签，其余全部丢掉，免得前端点进去是空气。
+// 另外标签只覆盖 24% 的条目，这里再补两条线索：$SYMBOL 写法和中文币名。
+const NEWS_TAG_OK = new Set(['BTC', 'ETH', 'BNB', 'SOL', 'XRP', 'DOGE', 'ADA', 'TRX', 'LINK', 'AVAX',
+  'DOT', 'LTC', 'BCH', 'SUI', 'APT', 'NEAR', 'ARB', 'OP', 'UNI', 'HBAR', 'PEPE', 'SHIB', 'TON',
+  'MATIC', 'POL', 'AAVE', 'ATOM', 'FIL', 'INJ', 'SEI', 'TIA', 'ORDI', 'WLD', 'ENA', 'JUP', 'PYTH',
+  'RNDR', 'RENDER', 'FET', 'TAO', 'ZEC', 'XMR', 'ETC', 'XLM', 'ALGO', 'VET', 'ICP', 'IMX', 'SAND',
+  'MANA', 'AXS', 'GALA', 'CRV', 'MKR', 'SNX', 'COMP', 'DYDX', 'LDO', 'EIGEN', 'ETHFI', 'PENDLE',
+  'ONDO', 'WIF', 'BONK', 'FLOKI', 'MEME', 'PENGU', 'TRUMP', 'HYPE', 'KAITO', 'VIRTUAL', 'USDC']);
+// 注：USDT 是计价单位不是标的，故意不放进白名单；能否点得开最终由前端按实时交易集合判定
+// 中文行文里最常出现的币名（中文媒体基本这么写）
+const NEWS_TAG_CN = {
+  比特币: 'BTC', 以太坊: 'ETH', 以太币: 'ETH', 币安币: 'BNB', 索拉纳: 'SOL', 瑞波: 'XRP',
+  狗狗币: 'DOGE', 艾达币: 'ADA', 波场: 'TRX', 莱特币: 'LTC', 比特现金: 'BCH', 比特币现金: 'BCH',
+  波卡: 'DOT', 雪崩: 'AVAX', 恒星币: 'XLM', 门罗币: 'XMR', 零币: 'ZEC', 大零币: 'ZEC',
+  柴犬币: 'SHIB', 佩佩: 'PEPE', 独角兽: 'UNI', 链环: 'LINK', 柚子币: 'EOS',
+};
+
+// 从「自带标签 + $SYMBOL + 中文币名」三处汇总，去重且只保留能点开的
+function newsTags(item) {
+  const out = [], seen = {};
+  const push = (s) => {
+    const u = String(s || '').toUpperCase();
+    if (NEWS_TAG_OK.has(u) && !seen[u]) { seen[u] = 1; out.push(u); }
+  };
+  const coins = item.coins || [];
+  for (let i = 0; i < coins.length; i++) push(coins[i].s);
+
+  const hay = String(item.title || '') + ' ' + String(item.smalltext || '');
+  let m;
+  const re = /\$([A-Z][A-Z0-9]{1,9})\b/g;
+  while ((m = re.exec(hay))) push(m[1]);
+  for (const k in NEWS_TAG_CN) { if (hay.indexOf(k) >= 0) push(NEWS_TAG_CN[k]); }
+  return out;
+}
+
+function shapeNews(items) {
+  const out = [];
+  for (let i = 0; i < items.length; i++) {
+    const d = items[i];
+    if (!d || !d.title) continue;
+    out.push({
+      id: String(d.id),
+      t: +d.newstime * 1000,
+      title: d.title,
+      text: String(d.smalltext || '').replace(/<[^>]*>/g, '').trim(),
+      tags: newsTags(d),
+      important: +d.important === 1,
+    });
+  }
+  return out;
+}
+
+function readNewsCache() {
+  try { return JSON.parse(fs.readFileSync(NEWS_CACHE_FILE, 'utf8')); } catch (e) { return null; }
+}
+
+async function getNews() {
+  const hit = cache.get('news');
+  if (hit && Date.now() - hit.at < NEWS_TTL) return hit.val;
+
+    // 普通快讯流（实时）
+  const batches = [];
+  for (let p = 1; p <= NEWS_PAGES; p++) batches.push(await newsFetchPage(p, '', 0));
+  let items = [];
+  for (let i = 0; i < batches.length; i++) if (batches[i]) items = items.concat(batches[i]);
+  if (items.length) newsWatermark = Math.max(newsWatermark, +items[0].newstime * 1000);
+
+  // important=1 这条「精选流」是停更的（服务端冻结在 2026-04-01，早于快讯流半年），
+  // 直接混进来会把四月的旧闻当成今天推给你。所以只在它确实紧跟快讯流时才采信，
+  // 否则整段丢弃 —— 宁可少给内容，也不能给你一条错的时间线。
+  if (items.length) {
+    const imp = [];
+    for (let p = 1; p <= NEWS_IMP_PAGES; p++) imp.push(await newsFetchPage(p, 'important=1&', 0));
+    let impItems = [];
+    for (let i = 0; i < imp.length; i++) if (imp[i]) impItems = impItems.concat(imp[i]);
+    const fresh = impItems.filter((d) => newsWatermark - +d.newstime * 1000 <= NEWS_IMP_MAX_LAG);
+    newsImportantDropped = impItems.length - fresh.length;
+    items = items.concat(fresh);
+  }
+
+  if (!items.length) {
+    // 接口挂了就回上一次的缓存，页面上能看出是旧数据
+    const old = readNewsCache();
+    if (old) return Object.assign({}, old, { stale: true });
+    return { ok: false, error: '币界网快讯不可达' };
+  }
+
+  // 去重（翻页之间有重叠），按时间倒序
+  const seen = {}, uniq = [];
+  items.forEach((d) => { const id = String(d.id); if (!seen[id]) { seen[id] = 1; uniq.push(d); } });
+  uniq.sort((a, b) => +b.newstime - +a.newstime);
+
+  const shaped = shapeNews(uniq);
+  const now = Date.now();
+  const windows = [[1, '1h'], [4, '4h'], [24, '24h']];
+  const pace = {};
+  windows.forEach((w) => { pace[w[1]] = shaped.filter((n) => now - n.t <= w[0] * 3600000).length; });
+  const freshCut = now - 24 * 3600000;
+  const fresh = shaped.filter((n) => n.t >= freshCut);
+
+  // 热度：按币种统计提及次数（近 24h）
+  const heat = {};
+  shaped.forEach((n) => { if (now - n.t > 24 * 3600000) return; n.tags.forEach((s) => { heat[s] = (heat[s] || 0) + 1; }); });
+  const hot = Object.keys(heat).map((s) => ({ s: s, n: heat[s] })).sort((a, b) => b.n - a.n).slice(0, 24);
+
+  const val = {
+    ok: true, updated: now, count: shaped.length,
+    latest: shaped.length ? shaped[0].t : null,
+    oldest: shaped.length ? shaped[shaped.length - 1].t : null,
+    pace: pace, hot: hot, hotWindow: fresh.length,
+    important: shaped.filter((n) => n.important).length,
+    dropped: newsImportantDropped,
+    source: '币界网 528btc · 快讯',
+    news: shaped,
+  };
+  try { fs.writeFileSync(NEWS_CACHE_FILE, JSON.stringify(val)); } catch (e) {}
+  cache.set('news', { at: Date.now(), val: val });
+  return val;
+}
+
 // ---------- HTTP ----------
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
@@ -741,6 +945,7 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/scan') return sendJSON(res, 200, await getScan());
     if (p === '/api/momentum') return sendJSON(res, 200, await getMomentum());
     if (p === '/api/stocks') return sendJSON(res, 200, await getStocks());
+    if (p === '/api/news') return sendJSON(res, 200, await getNews());
     if (p === '/api/hyperliquid') return sendJSON(res, 200, await getHyperliquid());
     if (p === '/api/klines') {
       const symbol = (url.searchParams.get('symbol') || 'BTCUSDT').toUpperCase();
