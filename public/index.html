@@ -248,7 +248,7 @@
 
     <section class="block">
       <div class="block-head">
-        <div><h2>策略模拟盘</h2><div class="sub">策略在本地浏览器里回测 · 支持杠杆与做空 · K 线取自 Binance 现货</div></div>
+        <div><h2>策略模拟盘</h2><div class="sub">本地浏览器回测 · 做空策略选中会自动勾选「允许做空」· K 线取自 Binance 现货</div></div>
         <span class="badge" id="stratBadge">—</span>
       </div>
 
@@ -273,8 +273,15 @@
               <option value="atrbreak">动量突破 + ATR 止损</option>
               <option value="volfilter">波动率过滤趋势</option>
             </optgroup>
-            <optgroup label="做空（需勾选允许做空）">
-              <option value="short">空头趋势</option>
+            <optgroup label="做空（选中会自动勾选「允许做空」）">
+              <option value="short">空头趋势（均线向下）</option>
+              <option value="shortbreak">破位追空 + ATR 止损</option>
+              <option value="shortmacd">MACD 死叉做空</option>
+              <option value="shortboll">布林带下轨追空</option>
+              <option value="shortx">空头排列 + 反弹失败</option>
+              <option value="shortvol">放量破位做空</option>
+              <option value="shortrsi">RSI 超买做空</option>
+              <option value="shortliq">空头 + ATR 止盈止损</option>
             </optgroup>
           </select>
         </div>
@@ -294,11 +301,12 @@
         </div>
         <textarea id="stratCode" class="strat-code" spellcheck="false" rows="12"></textarea>
                 <div class="sub strat-help">
-          可用：<code>MA(n)</code> <code>EMA(n)</code> <code>RSI(n)</code> <code>ATR(n)</code> <code>MACD(f,s,g)</code> <code>BOLL(n,k)</code>
+          可用：<code>MA(n)</code> <code>VMA(n)</code>（成交量均线）<code>EMA(n)</code> <code>RSI(n)</code> <code>ATR(n)</code> <code>MACD(f,s,g)</code> <code>BOLL(n,k)</code>
           <code>crossover(a,b)</code> <code>crossunder(a,b)</code> <code>highest(n)</code> <code>lowest(n)</code> <code>price</code> <code>volume</code> <code>POS</code> <code>ENTRY</code> <code>BARS</code><br>
           取值：<code>.v</code> 当前根 · <code>.p</code> 前一根 · <code>.at(k)</code> 前 k 根；
           <code>POS</code> 当前仓位 · <code>ENTRY</code> 开仓价 · <code>BARS</code> 已持仓根数；
-          返回 <b>1</b> 做多 / <b>-1</b> 做空 / <b>0</b> 空仓
+          返回 <b>1</b> 做多 / <b>-1</b> 做空 / <b>0</b> 空仓；
+          做空策略需勾选「允许做空」，否则 <code>-1</code> 会被压成 <code>0</code>（选中做空预设会自动勾上）
         </div>
         <div class="strat-params">
           <label class="pf"><span class="sub">初始资金</span><input id="stratCapital" class="select" type="number" value="10000" min="100" step="100"></label>

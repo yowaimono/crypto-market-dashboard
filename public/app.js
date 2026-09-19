@@ -1706,13 +1706,97 @@ const STRAT_PRESETS = {
     'return POS;',
   ].join('\n'),
 
-  // ---------- 做空 ----------
+  // ---------- 做空（须勾选「允许做空」，否则信号会被引擎压成 0）----------
+  // 说明：这里所有策略都只在空头结构里开仓，不做多。
+  // 加密市场长期有上行漂移，单边做空的期望收益本就吃亏，主要用途是
+  // 「行情转熊时对冲手里的现货」或「验证某个看跌逻辑」。杠杆建议 ≤3x。
   short: [
-    '// 空头趋势（需勾选「允许做空」）：价在 MA20 下方且 MA5<MA20 做空，站上 MA20 平仓',
+    '// 空头趋势：价在 MA20 下方 + MA5<MA20 且 MA20 走平或向下，站上 MA20 止损',
+    '// 最基础的空头跟随，适合已经确立的下跌趋势',
     'const f = MA(5), s = MA(20);',
-    'if (f.v === null || s.v === null) return 0;',
-    'if (price.v < s.v && f.v < s.v) return -1;',
+    'if (f.v === null || s.v === null || s.p === null) return 0;',
+    'const falling = s.v <= s.p;',
+    'if (price.v < s.v && f.v < s.v && falling) return -1;',
     'if (price.v > s.v) return 0;',
+    'return POS;',
+  ].join('\n'),
+  shortbreak: [
+    '// 破位追空 + ATR 双向离场：跌破前 24 根新低开空',
+    '// 止损 = 入场 + 2×ATR，止盈 = 入场 − 3×ATR（盈亏比 1.5:1）',
+    '// 注意：必须同时有止盈和止损。只有止损的话每笔都以亏损收场，胜率恒为 0',
+    'const lo = lowest(24), a = ATR(14);',
+    'if (lo.p === null || a.v === null) return 0;',
+    'if (POS === 0 && price.v < lo.p) return -1;',
+    'if (POS === -1 && ENTRY > 0) {',
+    '  if (price.v > ENTRY + a.v * 2) return 0;   // 止损',
+    '  if (price.v < ENTRY - a.v * 3) return 0;   // 止盈',
+    '}',
+    'return POS;',
+  ].join('\n'),
+  shortmacd: [
+    '// MACD 死叉做空：DIF 下穿 DEA 开空，金叉回补',
+    '// 比双均线空头信号快，但震荡市会被反复打脸',
+    'const m = MACD(12, 26, 9);',
+    'if (m.dif.v === null || m.dea.v === null) return 0;',
+    'if (crossunder(m.dif, m.dea)) return -1;',
+    'if (crossover(m.dif, m.dea)) return 0;',
+    'return POS;',
+  ].join('\n'),
+  shortboll: [
+    '// 布林带下轨追空：跌破下轨追（趋势延续），回到中轨回补',
+    '// 与「布林带突破追多」镜像，适合放量下破行情',
+    'const b = BOLL(20, 2);',
+    'if (b.mid.v === null) return 0;',
+    'if (price.v < b.low.v) return -1;',
+    'if (price.v > b.mid.v) return 0;',
+    'return POS;',
+  ].join('\n'),
+  shortrsi: [
+    '// RSI 超买做空：RSI 升破 70 开空（赌回落），跌破 50 回补',
+    '// 逆势空，强趋势里会被打穿；务必配合小杠杆 + 止损',
+    'const r = RSI(14);',
+    'if (r.v === null) return 0;',
+    'if (r.v > 70) return -1;',
+    'if (r.v < 50) return 0;',
+    'return POS;',
+  ].join('\n'),
+  shortvol: [
+    '// 放量破位做空：成交量 > 2×VMA20 且价创 24 根新低才开空',
+    '// 用放量过滤掉无量阴跌的假破位，信号少但质量高',
+    'const lo = lowest(24), v = VMA(20);',
+    'if (lo.p === null || v.v === null) return 0;',
+    'if (POS === 0 && price.v < lo.p && volume.v > v.v * 2) return -1;',
+    'if (POS === -1 && price.v > lo.v) return 0;',
+    'return POS;',
+  ].join('\n'),
+  shortx: [
+    '// 空头排列 + 反弹失败：MA5<MA10<MA20 且价格反抽 MA10 后收在其下方',
+    '// 顺势空「反弹」，比直接追跌的进场位更好，止损也更近',
+    'const a = MA(5), b = MA(10), c = MA(20);',
+    'if (a.v === null || b.v === null || c.v === null) return 0;',
+    'const bear = a.v < b.v && b.v < c.v;',
+    'if (POS === 0 && bear && price.p !== null) {',
+    '  const triedRally = price.p >= b.p && price.v < b.v;   // 上根碰到 MA10，本根又收下去',
+    '  if (triedRally) return -1;',
+    '  return 0;',
+    '}',
+    'if (POS === -1 && (price.v > c.v || a.v > b.v)) return 0;  // 结构破坏就回补',
+    'return POS;',
+  ].join('\n'),
+  shortliq: [
+    '// 空头 + ATR 止盈止损：止损 1.5×ATR、止盈 3×ATR（盈亏比 2:1），超时换标的',
+    '// 止损 = 入场 + 1.5×ATR，止盈 = 入场 − 3×ATR；用 BARS 兜底超时离场',
+    'const a = ATR(14), f = MA(10), s = MA(30);',
+    'if (a.v === null || f.v === null || s.v === null) return 0;',
+    'if (POS === 0) {',
+    '  if (f.v < s.v && price.v < f.v) return -1;',
+    '  return 0;',
+    '}',
+    'const stop = ENTRY + a.v * 1.5;',
+    'const take = ENTRY - a.v * 3;',
+    'if (price.v >= stop) return 0;',
+    'if (price.v <= take) return 0;',
+    'if (BARS > 60) return 0;   // 超过 60 根还没走出来就换标的',
     'return POS;',
   ].join('\n'),
 };
@@ -1780,6 +1864,7 @@ function runStrategy() {
     const key = kind + n;
     if (!cache1[key]) {
       cache1[key] = kind === 'ma' ? sma(closes, n)
+        : kind === 'vma' ? sma(vols, n)          // 成交量均线（放量做空要用）
         : kind === 'ema' ? emaSeries(closes, n)
         : kind === 'rsi' ? rsiSeries(closes, n)
         : kind === 'atr' ? atrSeries(candles, n)
@@ -1794,6 +1879,7 @@ function runStrategy() {
     at: (o) => arr[st.i - (o || 0)],
   });
   const MA = (n) => S(ser('ma', n));
+  const VMA = (n) => S(ser('vma', n));
   const EMA = (n) => S(ser('ema', n));
   const RSI = (n) => S(ser('rsi', n));
   const ATR = (n) => S(ser('atr', n));
@@ -1818,7 +1904,7 @@ function runStrategy() {
 
   let fn;
   try {
-    fn = new Function('MA', 'EMA', 'RSI', 'ATR', 'MACD', 'BOLL', 'crossover', 'crossunder',
+    fn = new Function('MA', 'VMA', 'EMA', 'RSI', 'ATR', 'MACD', 'BOLL', 'crossover', 'crossunder',
       'highest', 'lowest', 'price', 'volume', 'POS', 'i', 'ENTRY', 'BARS', code);
   } catch (e) {
     stratMsg('策略语法错误：' + e.message);
@@ -1834,7 +1920,7 @@ function runStrategy() {
     st.i = i;
     let target;
     try {
-      target = fn(MA, EMA, RSI, ATR, MACD, BOLL, crossover, crossunder, highest, lowest, price, volume, pos, i, pos !== 0 ? entry : 0, pos !== 0 ? (i - entryIdx) : 0);
+      target = fn(MA, VMA, EMA, RSI, ATR, MACD, BOLL, crossover, crossunder, highest, lowest, price, volume, pos, i, pos !== 0 ? entry : 0, pos !== 0 ? (i - entryIdx) : 0);
     } catch (e) { errMsg = '第 ' + i + ' 根执行出错：' + e.message; break; }
     target = Math.round(Number(target) || 0);
     if (target > 1) target = 1;
@@ -2088,7 +2174,21 @@ function onStrategyView() {
     syncRangeButtons(30);
     document.getElementById('stratCode').value = STRAT_PRESETS.ma;
     document.getElementById('stratPreset').addEventListener('change', (e) => {
-      document.getElementById('stratCode').value = STRAT_PRESETS[e.target.value] || '';
+      const key = e.target.value;
+      document.getElementById('stratCode').value = STRAT_PRESETS[key] || '';
+      // 选了做空策略就自动勾上「允许做空」，否则引擎会把 -1 压成 0，跑出来一笔交易都没有，
+      // 用户只会以为策略坏了。这个坑不踩第二遍。
+      const isShort = key.indexOf('short') === 0;
+      const box = document.getElementById('stratShort');
+      if (isShort) {
+        box.checked = true;
+        // 做空默认给个温和杠杆：加密市场长期上行，单边做空高杠杆极易爆仓
+        const levEl = document.getElementById('stratLev');
+        if (levEl && +levEl.value > 3) levEl.value = '3';
+      } else if (!/return\s+-1/.test(STRAT_PRESETS[key] || '')) {
+        box.checked = false;
+      }
+      stratMsg(isShort ? '做空策略已载入，已自动勾选「允许做空」并将杠杆上限降到 3x（可自行调高）' : '');
     });
     document.getElementById('stratRun').addEventListener('click', runStrategy);
     document.getElementById('stratIndBar').addEventListener('click', (e) => {
